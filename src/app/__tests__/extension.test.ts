@@ -89,6 +89,14 @@ describe("Davflare Chrome extension / default package", () => {
       false
     );
     expect(manifest.background).toEqual({ service_worker: "background.js" });
+    // #62 P1：快捷键快藏 + omnibox 检索已藏书签。
+    expect(manifest.commands).toEqual({
+      "save-current-page": {
+        suggested_key: { default: "Alt+Shift+S", mac: "Alt+Shift+S" },
+        description: "Save the current page to Davflare",
+      },
+    });
+    expect(manifest.omnibox).toEqual({ keyword: "df" });
     expect(fs.existsSync(path.join(extDir, "newtab.html"))).toBe(false);
     expect(fs.existsSync(path.join(extDir, "newtab.js"))).toBe(false);
   });

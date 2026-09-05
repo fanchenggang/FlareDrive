@@ -148,6 +148,109 @@ async function savePage(tab) {
 
 // 工具栏左键点击由 popup.html（收藏弹窗）接管；右键菜单保留一键收藏与主页默认视图切换。
 
+/**
+ * #62 P1: the configurable shortcut triggers the same quick-save as the
+ * toolbar popup. openPopup() shows that exact dialog; when it is
+ * unavailable (older Chrome) or rejects, fall back to the silent
+ * context-menu save path.
+ */
+async function quickSaveCurrentPage() {
+  if (typeof chrome.action.openPopup === "function") {
+    try {
+      await chrome.action.openPopup();
+      return;
+    } catch (err) {
+      /* fall through to the silent save */
+    }
+  }
+  var tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tabs && tabs[0]) await savePage(tabs[0]);
+}
+
+chrome.commands.onCommand.addListener(function (command) {
+  if (command === "save-current-page") quickSaveCurrentPage();
+});
+
+/* ---------- omnibox (#62 P1): "df <query>" searches the cached library ---------- */
+
+var OMNI_LIMIT = 6;
+var CACHE_KEY = "bookmarksCache";
+
+function xmlEscape(text) {
+  return String(text == null ? "" : text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+async function cachedBookmarksModel() {
+  var stored = await chrome.storage.local.get([CACHE_KEY]);
+  var cache = stored && stored[CACHE_KEY];
+  return cache && cache.model ? cache.model : { bookmarks: [] };
+}
+
+function omniDescription(item) {
+  var parts = [xmlEscape(item.title || item.url)];
+  if (item.tags && item.tags.length) {
+    parts.push("<dim>" + xmlEscape(item.tags.join(", ")) + "</dim>");
+  }
+  parts.push("<url>" + xmlEscape(item.url) + "</url>");
+  return parts.join(" ");
+}
+
+chrome.omnibox.onInputStarted.addListener(function () {
+  chrome.omnibox.setDefaultSuggestion({
+    description:
+      pickLang() === "zh" ? "搜索 Davflare 书签…" : "Search Davflare bookmarks…",
+  });
+});
+
+chrome.omnibox.onInputChanged.addListener(async function (text, suggest) {
+  var model = await cachedBookmarksModel();
+  var matches = Bookmarks.searchBookmarks(model, text, OMNI_LIMIT);
+  if (!matches.length) return;
+  var suggestions = [];
+  for (var i = 0; i < matches.length; i++) {
+    suggestions.push({
+      content: matches[i].url,
+      description: omniDescription(matches[i]),
+    });
+  }
+  // 第一条作为默认建议（回车直达），其余进下拉列表。
+  chrome.omnibox.setDefaultSuggestion({ description: suggestions[0].description });
+  suggest(suggestions.slice(1));
+});
+
+chrome.omnibox.onInputEntered.addListener(async function (text, disposition) {
+  var target = "";
+  if (Bookmarks.isWebUrl(text)) {
+    // 用户选中了某条建议：content 即书签 URL。
+    target = text;
+  } else {
+    var model = await cachedBookmarksModel();
+    var matches = Bookmarks.searchBookmarks(model, text, 1);
+    if (matches.length) target = matches[0].url;
+  }
+  var open = function (url) {
+    if (disposition === "newForegroundTab") chrome.tabs.create({ url: url, active: true });
+    else if (disposition === "newBackgroundTab")
+      chrome.tabs.create({ url: url, active: false });
+    else chrome.tabs.update({ url: url });
+  };
+  if (target) {
+    open(target);
+    return;
+  }
+  // 没有命中：退回书签库页面继续找。
+  var libraryUrl = chrome.runtime.getURL("bookmarks.html");
+  if (disposition === "newForegroundTab" || disposition === "newBackgroundTab") {
+    chrome.tabs.create({ url: libraryUrl, active: disposition === "newForegroundTab" });
+  } else {
+    chrome.tabs.update({ url: libraryUrl });
+  }
+});
+
 chrome.contextMenus.onClicked.addListener(function (info, tab) {
   if (info.menuItemId === MENU_MODE) {
     toggleDefaultMode();

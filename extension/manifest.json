@@ -22,6 +22,18 @@
   "background": {
     "service_worker": "background.js"
   },
+  "commands": {
+    "save-current-page": {
+      "suggested_key": {
+        "default": "Alt+Shift+S",
+        "mac": "Alt+Shift+S"
+      },
+      "description": "Save the current page to Davflare"
+    }
+  },
+  "omnibox": {
+    "keyword": "df"
+  },
   "permissions": [
     "storage",
     "activeTab",

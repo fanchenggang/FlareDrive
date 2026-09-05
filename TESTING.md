@@ -1,12 +1,12 @@
 # FlareDrive 回归测试清单
 
-> 最近一轮：2026-09-06 0a-12（工具栏收藏弹窗，HamHome 式点击收藏 + 主页入口）
+> 最近一轮：2026-09-06 0a-12（工具栏收藏弹窗 + 快捷键 + omnibox，issue #62）
 > 前几轮：2026-09-06 0a-11（扩展书签导入导出改为文件 + 收编 HamHome 一级入口，issue #65）、2026-09-06 0a-10（扩展设置并入主页 + 首次使用强制配置 + 删除 newtab 变体；书签库 UI 打磨 #57）、2026-09-05 0a-8（扩展网盘视图去 iframe，原生挂载 Web 端 React App）、2026-08-30 第三轮四批（Sites 管理面板 + MCP 深化 + davflare-cli）、2026-08-29 第六批（缺陷修复 + B5/B9/C9 收尾 + i18n 第二阶段收编 + 界面美化 + 单测/e2e 落地）、第五批（A9 i18n 第一阶段 + scripts/api-e2e.sh 回归套件沉淀）、第四批（多选拖拽/面包屑下拉/图标扩展）、第三批（目录分享/回收站清理/搜索高亮/动效 11 项）、第二批（目录级 API 等）、首批（暗色模式等）
 > 约束：所有测试数据操作仅在自己创建的目录内进行，测试后清理。
 
-## 0a-12. 工具栏收藏弹窗（HamHome 式；2026-09-06）
+## 0a-12. 工具栏收藏弹窗 + 快捷键 + omnibox（issue #62，HamHome 式；2026-09-06）
 
-工具栏左键从「直开主页」改为弹出收藏弹窗；主页入口移入弹窗 footer。
+工具栏左键从「直开主页」改为弹出收藏弹窗；主页入口移入弹窗 footer。P1 补齐可配置快捷键与 omnibox 检索。
 
 ### 改动
 | 项 | 内容 |
@@ -15,9 +15,11 @@
 | 弹窗状态机 | loading → ready；非 http(s) 页显示「只能收藏」；未配置实例显示引导 + 「去设置」按钮；加载失败显示错误 + 重试；412 冲突自动重载远端并保留用户输入；成功后禁用按钮并记忆 `popupLastFolder` |
 | 主页入口 | 弹窗 footer「插件主页 / 设置」：优先聚焦已开的 bookmarks.html 标签页，否则新开（?view= 指定视图）；复用已开标签时若指定 view 会导航过去（settings 修复） |
 | manifest | `action.default_popup: "popup.html"`；描述同步更新 |
+| 快捷键（P1） | manifest `commands.save-current-page`（建议 Alt+Shift+S）：优先 `chrome.action.openPopup()` 弹出收藏弹窗（与左键同一 UI）；openPopup 不可用/失败（旧 Chrome）退化为后台静默收藏（复用右键菜单的 savePage 路径） |
+| omnibox（P1） | manifest `omnibox.keyword: "df"`：地址栏输入 `df <词>` 用 `Bookmarks.searchBookmarks`（title/url/标签/分类大小写不敏感子串 AND 匹配，不引拼音词典）检索 `bookmarksCache` 缓存；首条设为默认建议，回车/下拉选择按 disposition 打开；无命中回退书签库页 |
 | background | 删 `chrome.action.onClicked` 直开逻辑（`handleToolbarClick`/`openLibraryPage`）；右键「切换工具栏默认模式」改为「切换插件主页默认视图」，通知文案同步 |
 | 主页默认视图 | shell 初始视图改由 `resolveToolbarTarget` 决定（显式 `?view=` 优先；未配置实例落 settings 保持先配置后使用）；设置页文案改为「插件主页默认视图」 |
-| Bookmarks API | 新增 `folderPaths(model)`：排序去重的分类路径（含祖先前缀），供弹窗 datalist |
+| Bookmarks API | 新增 `folderPaths(model)`：排序去重的分类路径（含祖先前缀），供弹窗 datalist；新增 `searchBookmarks(model, query, limit)` 供 omnibox |
 | 设置页 | modeLabel/modeHint/settingsCleared 文案更新为「插件主页默认视图」语义 |
 
 ### 待手动回归（Chrome 加载扩展）
@@ -29,6 +31,8 @@
 6. 断网/错误凭据点图标 → 对应错误文案 + 重试按钮；412 冲突 → 自动重载并提示再点一次。
 7. 右键工具栏图标「切换插件主页默认视图」→ 通知正确、主页初始视图随之切换；右键页面「收藏此页到 Davflare」一键收藏不受影响。
 8. 明暗主题：弹窗跟随系统/主页主题设置。
+9. 快捷键（chrome://extensions/shortcuts 可改）按 Alt+Shift+S → 弹出收藏弹窗且预填当前页；在 openPopup 不可用的环境退化为通知式静默收藏。
+10. 地址栏输入 `df` + 空格 → 提示「搜索 Davflare 书签…」；输入已藏站点关键词 → 下拉出标题+标签+URL 建议，回车打开；`df 不存在的词` 回车 → 打开书签库页。
 
 ## 0a-11. 扩展书签导入导出改为文件 + 收编 HamHome 入口（issue #65，2026-09-06）
 

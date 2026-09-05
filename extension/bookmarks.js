@@ -414,6 +414,38 @@ var Bookmarks = (function () {
     return { ok: true, model: model };
   }
 
+  /**
+   * Omnibox search (issue #62): case-insensitive substring AND-match over
+   * title/url/tags/folder. Deliberately lighter than the library page's
+   * pinyin-aware filter so the service worker never loads the pinyin
+   * dictionary. Returns up to `limit` normalized bookmarks.
+   */
+  function searchBookmarks(model, query, limit) {
+    var terms = String(query || "")
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
+    if (!terms.length) return [];
+    var cap = typeof limit === "number" && isFinite(limit) && limit > 0 ? limit : 8;
+    var items = normalizeModel(model).bookmarks;
+    var out = [];
+    for (var i = 0; i < items.length && out.length < cap; i++) {
+      var item = items[i];
+      var hay = (
+        item.title + "\n" + item.url + "\n" + item.tags.join(" ") + "\n" + item.folder
+      ).toLowerCase();
+      var hit = true;
+      for (var j = 0; j < terms.length; j++) {
+        if (hay.indexOf(terms[j]) === -1) {
+          hit = false;
+          break;
+        }
+      }
+      if (hit) out.push(item);
+    }
+    return out;
+  }
+
   function modelToJsonText(model) {
     return JSON.stringify(normalizeModel(model), null, 2);
   }
@@ -447,6 +479,7 @@ var Bookmarks = (function () {
     normalizeModel: normalizeModel,
     parseHtml: parseHtml,
     removeBookmark: removeBookmark,
+    searchBookmarks: searchBookmarks,
     serializeHtml: serializeHtml,
     sniffJsonImport: sniffJsonImport,
     updateBookmark: updateBookmark,
