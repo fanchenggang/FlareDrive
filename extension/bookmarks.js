@@ -329,6 +329,70 @@ var Bookmarks = (function () {
     return out;
   }
 
+  /**
+   * Issue #65: tell a Davflare backup JSON from a HamHome backup JSON before
+   * parsing. Both wrap a bookmarks array, but only Davflare entries carry
+   * folder/note/added while HamHome uses categoryId/description/createdAt —
+   * feeding HamHome data through modelFromJson would silently drop those
+   * fields. Bare arrays are HamHome's shape; version field alone decides for
+   * entries with no distinguishing keys (or an empty list).
+   * Returns {flavor: "davflare"|"hamhome", parsed} or null when the text is
+   * not a bookmark JSON at all.
+   */
+  function sniffJsonImport(text) {
+    var parsed;
+    try {
+      parsed = JSON.parse(String(text || ""));
+    } catch (err) {
+      return null;
+    }
+    if (!parsed || typeof parsed !== "object") return null;
+    var items = Array.isArray(parsed) ? parsed : parsed.bookmarks;
+    if (!Array.isArray(items)) return null;
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i];
+      if (!item || typeof item !== "object") continue;
+      if ("categoryId" in item || "description" in item || "createdAt" in item) {
+        return { flavor: "hamhome", parsed: parsed };
+      }
+      if ("folder" in item || "note" in item || "added" in item || "id" in item) {
+        return { flavor: "davflare", parsed: parsed };
+      }
+    }
+    return { flavor: "davflare", parsed: parsed };
+  }
+
+  /**
+   * Parse one imported backup file into a model. Accepts Davflare JSON,
+   * HamHome JSON (meta.json shape, optionally with inline `categories`) and
+   * Netscape HTML; hamhome is injected because it loads after this file in
+   * the page. Returns {ok, model} or {ok: false, reason: "invalid"|"empty"}.
+   */
+  function importBackup(text, hamhome) {
+    var trimmed = String(text || "").replace(/^\uFEFF/, "").trim();
+    var model;
+    if (trimmed.charAt(0) === "{" || trimmed.charAt(0) === "[") {
+      var sniff = sniffJsonImport(trimmed);
+      if (!sniff) return { ok: false, reason: "invalid" };
+      if (sniff.flavor === "hamhome") {
+        var hh = hamhome.importFrom(
+          sniff.parsed,
+          sniff.parsed && !Array.isArray(sniff.parsed) ? sniff.parsed.categories : null
+        );
+        if (!hh.ok) return { ok: false, reason: "invalid" };
+        model = hh.model;
+      } else {
+        var parsed = modelFromJson(trimmed);
+        if (!parsed.ok) return { ok: false, reason: "invalid" };
+        model = parsed.model;
+      }
+    } else {
+      model = parseHtml(trimmed);
+    }
+    if (!model.bookmarks.length) return { ok: false, reason: "empty" };
+    return { ok: true, model: model };
+  }
+
   function modelToJsonText(model) {
     return JSON.stringify(normalizeModel(model), null, 2);
   }
@@ -351,6 +415,7 @@ var Bookmarks = (function () {
     addBookmark: addBookmark,
     adoptRichFields: adoptRichFields,
     emptyModel: emptyModel,
+    importBackup: importBackup,
     isWebUrl: isWebUrl,
     isValidModel: isValidModel,
     makeId: makeId,
@@ -361,6 +426,7 @@ var Bookmarks = (function () {
     parseHtml: parseHtml,
     removeBookmark: removeBookmark,
     serializeHtml: serializeHtml,
+    sniffJsonImport: sniffJsonImport,
     updateBookmark: updateBookmark,
     urlKey: urlKey,
   };

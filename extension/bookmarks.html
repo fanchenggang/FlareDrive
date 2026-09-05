@@ -47,7 +47,6 @@
               <button id="moreBtn" class="ghost menuToggle" type="button" aria-haspopup="true" aria-expanded="false">⋯ <span id="moreText">More</span></button>
               <div id="moreMenu" class="popMenu" role="menu">
                 <button id="importBtn" class="menuItem" type="button">Import</button>
-                <button id="hhImportBtn" class="menuItem" type="button">HamHome</button>
                 <button id="exportBtn" class="menuItem" type="button">Export</button>
               </div>
             </div>
@@ -211,6 +210,42 @@
         <menu>
           <button id="addCancel" class="ghost" type="button">Cancel</button>
           <button id="addSave" class="primary" type="submit">Add</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="importDialog">
+      <form id="importForm" novalidate>
+        <h2 id="importDialogTitle">Import bookmarks</h2>
+        <p id="importDesc" class="dialogSubtitle"></p>
+        <input id="importFile" type="file" accept=".json,.htm,.html,application/json,text/html" hidden />
+        <div class="snapActions" id="importFileRow">
+          <button id="importPick" class="primary" type="button"></button>
+        </div>
+        <fieldset class="dlgSection">
+          <legend id="importAltLegend"></legend>
+          <div class="snapActions">
+            <button id="importBrowserBtn" class="ghost" type="button"></button>
+            <button id="importHamHomeBtn" class="ghost" type="button"></button>
+          </div>
+        </fieldset>
+        <p id="importStatus" class="status err"></p>
+        <menu>
+          <button id="importCancel" class="ghost" type="button">Cancel</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="exportDialog">
+      <form id="exportForm" novalidate>
+        <h2 id="exportDialogTitle">Export bookmarks</h2>
+        <p id="exportDesc" class="dialogSubtitle"></p>
+        <div class="snapActions">
+          <button id="exportHtmlBtn" class="primary" type="button"></button>
+          <button id="exportJsonBtn" class="primary" type="button"></button>
+        </div>
+        <menu>
+          <button id="exportCancel" class="ghost" type="button">Cancel</button>
         </menu>
       </form>
     </dialog>

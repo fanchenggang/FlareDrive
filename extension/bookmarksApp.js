@@ -6,7 +6,7 @@
  * pinyin.js; this file only touches chrome.* and the DOM.
  */
 
-/* global Bookmarks, BookmarksView, DavflareDav, Workspaces, TabRules, PinyinIndex, mergeSettings */
+/* global Bookmarks, BookmarksView, DavflareDav, Workspaces, TabRules, PinyinIndex, HamHome, mergeSettings */
 
 var COPY = {
   en: {
@@ -32,12 +32,25 @@ var COPY = {
     add: "Add",
     save: "Save",
     import: "Import",
-    hhImport: "HamHome",
     hhNotFound: "No bookmarks/meta.json found under /HamHomeSync/ on this instance.",
     hhInvalid: "HamHome data could not be parsed.",
     hhImported: "Imported {n} bookmark(s) from HamHome.",
     hhNone: "Nothing new to import from HamHome.",
     export: "Export",
+    importDialogTitle: "Import bookmarks",
+    importDesc:
+      "Pick a Davflare / HamHome JSON backup or a bookmarks HTML exported from your browser.",
+    importPick: "Choose file… (JSON / HTML)",
+    importAltLegend: "Other ways to import",
+    importBrowser: "From browser bookmarks",
+    importHamHomeSync: "From this instance's HamHomeSync folder",
+    importInvalid: "Could not parse this file as a bookmark backup.",
+    importEmpty: "No bookmarks found in this file.",
+    exportDialogTitle: "Export bookmarks",
+    exportDesc: "HTML can be re-imported by browsers; JSON keeps folders, tags and notes.",
+    exportHtmlAction: "HTML (browser-importable)",
+    exportJsonAction: "JSON (full backup)",
+    exportedJson: "Exported davflare-bookmarks.json.",
     drive: "Drive",
     driveReload: "Reload",
     driveOpenExternal: "Open in new tab",
@@ -80,9 +93,7 @@ var COPY = {
     probeOther: "The instance returned an unexpected response.",
     moreLabel: "More",
     emptyTitle: "Your library is empty",
-    emptyDesc: "Save your go-to pages, or import from your browser or HamHome.",
-    emptyImportBrowser: "Import browser bookmarks",
-    emptyImportHamHome: "Import from HamHome",
+    emptyDesc: "Save your go-to pages, or import a backup file.",
     clearFilter: "Clear filters",
     emptyFolderTitle: "No bookmarks in this folder yet",
     emptyTagTitle: "No bookmarks with this tag yet",
@@ -173,12 +184,24 @@ var COPY = {
     add: "添加",
     save: "保存",
     import: "导入",
-    hhImport: "HamHome",
     hhNotFound: "实例 /HamHomeSync/bookmarks/ 下没有 meta.json。",
     hhInvalid: "HamHome 数据无法解析。",
     hhImported: "已从 HamHome 导入 {n} 个书签。",
     hhNone: "HamHome 没有可导入的新书签。",
     export: "导出",
+    importDialogTitle: "导入书签",
+    importDesc: "选择 Davflare / HamHome 的 JSON 备份，或浏览器导出的书签 HTML 文件。",
+    importPick: "选择文件…（JSON / HTML）",
+    importAltLegend: "其他导入方式",
+    importBrowser: "从浏览器书签导入",
+    importHamHomeSync: "从本实例 HamHomeSync 目录导入",
+    importInvalid: "无法把这个文件解析成书签备份。",
+    importEmpty: "文件里没有找到可导入的书签。",
+    exportDialogTitle: "导出书签",
+    exportDesc: "HTML 可被浏览器重新导入；JSON 包含文件夹、标签与备注等完整信息。",
+    exportHtmlAction: "HTML（浏览器可导入）",
+    exportJsonAction: "JSON（完整备份）",
+    exportedJson: "已导出 davflare-bookmarks.json。",
     drive: "网盘",
     driveReload: "刷新",
     driveOpenExternal: "新标签页打开",
@@ -218,9 +241,7 @@ var COPY = {
     probeOther: "实例返回了未预期的响应。",
     moreLabel: "更多",
     emptyTitle: "书签库还是空的",
-    emptyDesc: "把常用页面存进来，或从浏览器 / HamHome 导入。",
-    emptyImportBrowser: "导入浏览器书签",
-    emptyImportHamHome: "从 HamHome 迁入",
+    emptyDesc: "把常用页面存进来，或导入一份备份文件。",
     clearFilter: "清除筛选",
     emptyFolderTitle: "该分类下还没有书签",
     emptyTagTitle: "该标签下还没有书签",
@@ -1093,8 +1114,7 @@ function renderItems() {
         desc: t.emptyDesc,
         actions: [
           { label: t.add, kind: "primary", onClick: openAddDialog },
-          { label: t.emptyImportBrowser, kind: "ghost", onClick: importChromeBookmarks },
-          { label: t.emptyImportHamHome, kind: "ghost", onClick: importHamHome },
+          { label: t.import, kind: "ghost", onClick: openImportDialog },
         ],
       });
     } else if (state.filter.kind === "folder") {
@@ -1996,19 +2016,74 @@ async function importHamHome() {
   if (ok) flashStatus(fmt(added > 0 ? t.hhImported : t.hhNone, { n: added }));
 }
 
-function exportHtml() {
-  var blob = new Blob([Bookmarks.serializeHtml(state.model)], { type: "text/html" });
+function downloadText(filename, mime, text) {
+  var blob = new Blob([text], { type: mime });
   var url = URL.createObjectURL(blob);
   var a = document.createElement("a");
   a.href = url;
-  a.download = "bookmarks.html";
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   a.remove();
   setTimeout(function () {
     URL.revokeObjectURL(url);
   }, 5000);
+}
+
+function exportHtml() {
+  downloadText("bookmarks.html", "text/html", Bookmarks.serializeHtml(state.model));
   flashStatus(t.exported);
+}
+
+function exportJson() {
+  downloadText(
+    "davflare-bookmarks.json",
+    "application/json",
+    Bookmarks.modelToJsonText(state.model)
+  );
+  flashStatus(t.exportedJson);
+}
+
+/* ---------- import dialog (issue #65) ---------- */
+
+function openImportDialog() {
+  $("importStatus").textContent = "";
+  $("importFile").value = "";
+  $("importDialog").showModal();
+}
+
+function openExportDialog() {
+  $("exportDialog").showModal();
+}
+
+/**
+ * File import (issue #65): read the picked backup file, merge it into the
+ * library by URL and report the count. JSON (Davflare or HamHome shape) and
+ * Netscape HTML are both accepted; detection lives in Bookmarks.importBackup.
+ */
+async function onImportFilePicked(event) {
+  var file = event.target.files && event.target.files[0];
+  event.target.value = "";
+  if (!file) return;
+  $("importStatus").textContent = "";
+  var text;
+  try {
+    text = await file.text();
+  } catch (err) {
+    $("importStatus").textContent = t.importInvalid;
+    return;
+  }
+  var res = Bookmarks.importBackup(text, HamHome);
+  if (!res.ok) {
+    $("importStatus").textContent = res.reason === "empty" ? t.importEmpty : t.importInvalid;
+    return;
+  }
+  var before = state.model.bookmarks.length;
+  state.model = Bookmarks.mergeModels(state.model, res.model);
+  var added = state.model.bookmarks.length - before;
+  $("importDialog").close();
+  var ok = await persist();
+  if (ok) flashStatus(fmt(added > 0 ? t.importDone : t.importNone, { n: added }));
 }
 
 /* ---------- dialogs ---------- */
@@ -2101,8 +2176,19 @@ function applyCopy() {
   $("loading").textContent = t.loading;
   $("addBtn").textContent = t.add;
   $("importBtn").textContent = t.import;
-  $("hhImportBtn").textContent = t.hhImport;
   $("exportBtn").textContent = t.export;
+  $("importDialogTitle").textContent = t.importDialogTitle;
+  $("importDesc").textContent = t.importDesc;
+  $("importPick").textContent = t.importPick;
+  $("importAltLegend").textContent = t.importAltLegend;
+  $("importBrowserBtn").textContent = t.importBrowser;
+  $("importHamHomeBtn").textContent = t.importHamHomeSync;
+  $("importCancel").textContent = t.cancel;
+  $("exportDialogTitle").textContent = t.exportDialogTitle;
+  $("exportDesc").textContent = t.exportDesc;
+  $("exportHtmlBtn").textContent = t.exportHtmlAction;
+  $("exportJsonBtn").textContent = t.exportJsonAction;
+  $("exportCancel").textContent = t.cancel;
   $("driveBtn").textContent = t.drive;
   $("settingsBtn").textContent = t.settings;
   $("moreText").textContent = t.moreLabel;
@@ -2284,9 +2370,34 @@ function wireEvents() {
     $("confirmDialog").close();
     if (fn) fn();
   });
-  $("importBtn").addEventListener("click", importChromeBookmarks);
-  $("hhImportBtn").addEventListener("click", importHamHome);
-  $("exportBtn").addEventListener("click", exportHtml);
+  $("importBtn").addEventListener("click", openImportDialog);
+  $("exportBtn").addEventListener("click", openExportDialog);
+  $("importPick").addEventListener("click", function () {
+    $("importFile").click();
+  });
+  $("importFile").addEventListener("change", onImportFilePicked);
+  $("importBrowserBtn").addEventListener("click", function () {
+    $("importDialog").close();
+    importChromeBookmarks();
+  });
+  $("importHamHomeBtn").addEventListener("click", function () {
+    $("importDialog").close();
+    importHamHome();
+  });
+  $("importCancel").addEventListener("click", function () {
+    $("importDialog").close();
+  });
+  $("exportHtmlBtn").addEventListener("click", function () {
+    $("exportDialog").close();
+    exportHtml();
+  });
+  $("exportJsonBtn").addEventListener("click", function () {
+    $("exportDialog").close();
+    exportJson();
+  });
+  $("exportCancel").addEventListener("click", function () {
+    $("exportDialog").close();
+  });
   $("settingsBtn").addEventListener("click", openSettings);
   $("saveWindowBtn").addEventListener("click", saveCurrentWindow);
   $("driveBtn").addEventListener("click", function () {

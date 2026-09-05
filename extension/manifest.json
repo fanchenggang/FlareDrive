@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Davflare",
-  "version": "1.2.3",
+  "version": "1.3.0",
   "description": "Open your Davflare drive or bookmark library from the toolbar.",
   "icons": {
     "16": "icons/icon16.png",
