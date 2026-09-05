@@ -7,20 +7,27 @@
  * open, so page contexts and the service worker can both call it). Error
  * kinds mirror what the instance can actually return:
  *   network        — fetch threw or no instance URL
+ *   timeout        — AbortController fired (large library / slow network)
  *   disabled       — webdav feature flag off (404 before auth)
  *   notConfigured  — server lacks WEBDAV_USERNAME/PASSWORD (403)
  *   unauthorized   — wrong credentials (401)
  *   conflict       — If-Match precondition failed (412)
- *   httpNNN        — anything else
+ *   httpNNN        — anything else (callers should surface the status)
  */
 
 var DavflareDav = (function () {
   var HTML_PATH = "bookmarks.html";
   var JSON_PATH = "bookmarks.json";
+  // Large libraries (900+ bookmarks) can take a while over WebDAV; keep a
+  // generous default so genuine slow GETs finish, while still failing loud
+  // instead of hanging the MV3 service worker forever (#68 / #69).
+  var DEFAULT_TIMEOUT_MS = 45000;
 
   function mapStatusKind(status) {
+    if (!status) return "network";
     if (status === 401) return "unauthorized";
     if (status === 403) return "notConfigured";
+    if (status === 412) return "conflict";
     return "http" + status;
   }
 
@@ -36,6 +43,10 @@ var DavflareDav = (function () {
     var username = String(opts.username || "");
     var password = String(opts.password || "");
     var fetchImpl = opts.fetchImpl || (typeof fetch === "function" ? fetch : null);
+    var defaultTimeoutMs =
+      typeof opts.timeoutMs === "number" && isFinite(opts.timeoutMs)
+        ? opts.timeoutMs
+        : DEFAULT_TIMEOUT_MS;
 
     function authHeader() {
       return "Basic " + btoa(unescape(encodeURIComponent(username + ":" + password)));
@@ -49,14 +60,37 @@ var DavflareDav = (function () {
       var headers = { Authorization: authHeader() };
       var keys = Object.keys(extra.headers || {});
       for (var i = 0; i < keys.length; i++) headers[keys[i]] = extra.headers[keys[i]];
+
+      var timeoutMs =
+        typeof extra.timeoutMs === "number" && isFinite(extra.timeoutMs)
+          ? extra.timeoutMs
+          : defaultTimeoutMs;
+      var controller = null;
+      var timer = null;
       try {
-        var res = await fetchImpl(url, {
+        var init = {
           method: method,
           headers: headers,
           body: extra.body,
-        });
+        };
+        if (
+          timeoutMs > 0 &&
+          typeof AbortController === "function"
+        ) {
+          controller = new AbortController();
+          init.signal = controller.signal;
+          timer = setTimeout(function () {
+            try {
+              controller.abort();
+            } catch (abortErr) {
+              /* ignore */
+            }
+          }, timeoutMs);
+        }
+        var res = await fetchImpl(url, init);
         var text = "";
-        if (method === "GET" || method === "PROPFIND") {
+        // 304 has no body; skip reading. GET/PROPFIND otherwise need the payload.
+        if (res.status !== 304 && (method === "GET" || method === "PROPFIND")) {
           try {
             text = await res.text();
           } catch (err) {
@@ -77,7 +111,18 @@ var DavflareDav = (function () {
           etag: etag,
         };
       } catch (err) {
-        return { status: 0, ok: false, kind: "network", text: "", etag: null };
+        var aborted =
+          (err && err.name === "AbortError") ||
+          (controller && controller.signal && controller.signal.aborted);
+        return {
+          status: 0,
+          ok: false,
+          kind: aborted ? "timeout" : "network",
+          text: "",
+          etag: null,
+        };
+      } finally {
+        if (timer) clearTimeout(timer);
       }
     }
 
@@ -86,7 +131,9 @@ var DavflareDav = (function () {
       var res = await request("PROPFIND", root + "/", { headers: { Depth: "0" } });
       if (res.ok) return { ok: true };
       if (res.status === 404) return { ok: false, kind: "disabled" };
-      return { ok: false, kind: res.kind || "network" };
+      var out = { ok: false, kind: res.kind || "network" };
+      if (res.status) out.status = res.status;
+      return out;
     }
 
     /**
@@ -105,10 +152,10 @@ var DavflareDav = (function () {
         }
         prefix += seg + "/";
         var res = await request("MKCOL", root + "/" + prefix);
-        if (res.status === 0) return { ok: false, kind: "network" };
+        if (res.status === 0) return { ok: false, kind: res.kind || "network" };
         if (res.ok || res.status === 405) continue;
         if (res.status === 404) return { ok: false, kind: "disabled" };
-        return { ok: false, kind: mapStatusKind(res.status) };
+        return { ok: false, kind: mapStatusKind(res.status), status: res.status };
       }
       return { ok: true };
     }
@@ -131,32 +178,38 @@ var DavflareDav = (function () {
         }
         prefix += seg + "/";
         var res = await request("MKCOL", dir + prefix);
-        if (res.status === 0) return { ok: false, kind: "network" };
+        if (res.status === 0) return { ok: false, kind: res.kind || "network" };
         if (res.ok || res.status === 405) continue;
         if (res.status === 404) return { ok: false, kind: "disabled" };
-        return { ok: false, kind: mapStatusKind(res.status) };
+        return { ok: false, kind: mapStatusKind(res.status), status: res.status };
       }
       return { ok: true };
-    }
-
-    async function getJsonText() {
-      var res = await request("GET", dir + JSON_PATH);
-      return res.status === 200 ? res.text : null;
     }
 
     /**
      * GET one file under bookmarks/. A 404 is ambiguous (missing file vs
      * feature flag off), so probe the root to disambiguate.
+     * Pass options.headers (e.g. If-None-Match) for conditional GET (#69).
      */
-    async function getFile(fileName) {
-      var res = await request("GET", dir + fileName);
-      if (res.status === 0) return { ok: false, kind: "network" };
+    async function getFile(fileName, options) {
+      options = options || {};
+      var res = await request("GET", dir + fileName, { headers: options.headers || {} });
+      if (res.status === 0) return { ok: false, kind: res.kind || "network" };
+      if (res.status === 304) {
+        return {
+          ok: true,
+          notModified: true,
+          missing: false,
+          text: null,
+          etag: res.etag || (options.headers && options.headers["If-None-Match"]) || null,
+        };
+      }
       if (res.status === 404) {
         var probeRes = await probe();
         if (!probeRes.ok) return probeRes;
         return { ok: true, missing: true, text: null, etag: null };
       }
-      if (!res.ok) return { ok: false, kind: res.kind };
+      if (!res.ok) return { ok: false, kind: res.kind, status: res.status };
       return { ok: true, missing: false, text: res.text, etag: res.etag };
     }
 
@@ -170,24 +223,63 @@ var DavflareDav = (function () {
         body: String(body == null ? "" : body),
         headers: headers,
       });
-      if (res.status === 0) return { ok: false, kind: "network" };
+      if (res.status === 0) return { ok: false, kind: res.kind || "network" };
       if (res.status === 412) return { ok: false, kind: "conflict" };
-      if (!res.ok) return { ok: false, kind: res.kind };
-      return { ok: true };
+      if (!res.ok) return { ok: false, kind: res.kind, status: res.status };
+      return { ok: true, etag: res.etag };
     }
 
     /** DELETE one file under bookmarks/; a missing file counts as deleted. */
     async function deleteFile(fileName) {
       var res = await request("DELETE", dir + fileName);
-      if (res.status === 0) return { ok: false, kind: "network" };
+      if (res.status === 0) return { ok: false, kind: res.kind || "network" };
       if (res.ok || res.status === 404) return { ok: true };
-      return { ok: false, kind: mapStatusKind(res.status) };
+      return { ok: false, kind: mapStatusKind(res.status), status: res.status };
     }
 
-    async function getBookmarks() {
-      var html = await getFile(HTML_PATH);
-      if (!html.ok) return html;
-      var jsonText = await getJsonText();
+    /**
+     * Load the bookmark library. Fetches html + json in parallel (#69).
+     * options.ifNoneMatch → conditional GET; 304 yields { notModified: true }.
+     */
+    async function getBookmarks(options) {
+      options = options || {};
+      var cond = {};
+      if (options.ifNoneMatch) {
+        cond["If-None-Match"] = options.ifNoneMatch;
+      }
+      var htmlPromise = getFile(HTML_PATH, { headers: cond });
+      var jsonPromise = request("GET", dir + JSON_PATH, {
+        headers: cond,
+      });
+
+      var html = await htmlPromise;
+      if (html.notModified) {
+        // Settle the companion request; its body is unused on 304.
+        try {
+          await jsonPromise;
+        } catch (err) {
+          /* ignore */
+        }
+        return {
+          ok: true,
+          notModified: true,
+          missing: false,
+          html: "",
+          etag: html.etag || options.ifNoneMatch || null,
+          jsonText: null,
+        };
+      }
+      if (!html.ok) {
+        try {
+          await jsonPromise;
+        } catch (err2) {
+          /* ignore */
+        }
+        return html;
+      }
+
+      var jres = await jsonPromise;
+      var jsonText = jres && jres.status === 200 ? jres.text : null;
       return {
         ok: true,
         missing: Boolean(html.missing),
@@ -209,9 +301,9 @@ var DavflareDav = (function () {
         body: String(payload.html || ""),
         headers: headers,
       });
-      if (res.status === 0) return { ok: false, kind: "network" };
+      if (res.status === 0) return { ok: false, kind: res.kind || "network" };
       if (res.status === 412) return { ok: false, kind: "conflict" };
-      if (!res.ok) return { ok: false, kind: res.kind };
+      if (!res.ok) return { ok: false, kind: res.kind, status: res.status };
 
       var jsonSaved = false;
       if (typeof payload.json === "string") {
@@ -221,7 +313,7 @@ var DavflareDav = (function () {
         });
         jsonSaved = jres.ok;
       }
-      return { ok: true, jsonSaved: jsonSaved };
+      return { ok: true, jsonSaved: jsonSaved, etag: res.etag || null };
     }
 
     return {
@@ -236,7 +328,7 @@ var DavflareDav = (function () {
     };
   }
 
-  return { createDavClient: createDavClient };
+  return { createDavClient: createDavClient, DEFAULT_TIMEOUT_MS: DEFAULT_TIMEOUT_MS };
 })();
 
 if (typeof module !== "undefined" && module.exports) {

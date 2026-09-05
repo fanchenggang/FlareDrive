@@ -107,7 +107,9 @@ var COPY = {
     errUnauthorized: "Wrong WebDAV username or password. Update them in settings.",
     errNetwork: "Cannot reach the instance. Check the URL in settings.",
     errConflict: "Changed elsewhere — reloaded the remote copy. Please retry.",
+    errTimeout: "The instance timed out (large library or slow network). Try again.",
     errOther: "The instance returned an unexpected response.",
+    retry: "Retry",
     invalidUrl: "Enter a valid http(s) URL.",
     exists: "This URL is already in the library.",
     added: "Saved.",
@@ -255,7 +257,9 @@ var COPY = {
     errUnauthorized: "WebDAV 用户名或密码错误，请在设置中更新。",
     errNetwork: "无法连接实例，请在设置中检查地址。",
     errConflict: "内容已在别处更新——已重新加载远端，请重试。",
+    errTimeout: "实例响应超时（库较大或网络慢），请重试。",
     errOther: "实例返回了未预期的响应。",
+    retry: "重试",
     invalidUrl: "请填写有效的 http(s) 地址。",
     exists: "该地址已在书签库中。",
     added: "已保存。",
@@ -317,6 +321,7 @@ var ERROR_KEY = {
   notConfigured: "errNotConfigured",
   unauthorized: "errUnauthorized",
   network: "errNetwork",
+  timeout: "errTimeout",
   conflict: "errConflict",
 };
 
@@ -378,7 +383,14 @@ function folderLabel(name) {
 
 function errorText(kind) {
   var key = ERROR_KEY[kind];
-  return key ? t[key] : t.errOther;
+  if (key) return t[key];
+  if (kind && String(kind).indexOf("http") === 0) {
+    var code = String(kind).slice(4);
+    return lang === "zh"
+      ? "实例返回了未预期的响应（HTTP " + code + "）。"
+      : "Unexpected response from the instance (HTTP " + code + ").";
+  }
+  return t.errOther;
 }
 
 /* ---------- theme ---------- */
@@ -436,6 +448,7 @@ function saveCache() {
   var payload = {};
   payload[CACHE_KEY] = {
     model: state.model,
+    etag: state.etag || null,
     syncedAt: state.syncedAt,
     bytes: state.bytes,
   };
@@ -447,6 +460,7 @@ function renderFromCache() {
     var cache = stored && stored[CACHE_KEY];
     if (cache && cache.model) {
       state.model = Bookmarks.normalizeModel(cache.model);
+      state.etag = cache.etag || null;
       state.syncedAt = cache.syncedAt || 0;
       state.bytes = cache.bytes || 0;
       renderAll();
@@ -456,6 +470,22 @@ function renderFromCache() {
 
 function computeBytes() {
   return Bookmarks.serializeHtml(state.model).length + Bookmarks.modelToJsonText(state.model).length;
+}
+
+function showLibraryError(kind) {
+  // Auth/config problems → settings; everything else → retry (#69).
+  if (
+    kind === "unauthorized" ||
+    kind === "notConfigured" ||
+    kind === "disabled" ||
+    kind === "network"
+  ) {
+    showBanner(errorText(kind), t.openSettings, openSettings);
+  } else {
+    showBanner(errorText(kind), t.retry, function () {
+      refresh();
+    });
+  }
 }
 
 async function refresh() {
@@ -468,9 +498,15 @@ async function refresh() {
       renderAll();
       return;
     }
-    var res = await made.client.getBookmarks();
+    var getOpts = state.etag ? { ifNoneMatch: state.etag } : {};
+    var res = await made.client.getBookmarks(getOpts);
     if (!res.ok) {
-      showBanner(errorText(res.kind), t.openSettings, openSettings);
+      showLibraryError(res.kind);
+      renderAll();
+      return;
+    }
+    if (res.notModified) {
+      hideBanner();
       renderAll();
       return;
     }
@@ -485,6 +521,9 @@ async function refresh() {
     state.syncedAt = Date.now();
     saveCache();
     hideBanner();
+    renderAll();
+  } catch (err) {
+    showLibraryError("network");
     renderAll();
   } finally {
     $("loading").classList.add("hidden");
@@ -503,6 +542,7 @@ async function persist() {
     etag: state.etag,
   });
   if (put.ok) {
+    if (put.etag) state.etag = put.etag;
     state.bytes = computeBytes();
     state.syncedAt = Date.now();
     saveCache();
