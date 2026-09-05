@@ -6,10 +6,14 @@
  * to the instance's WebDAV library, and offer entries into the shell home
  * page (bookmarks.html) and its settings view. The right-click quick-save in
  * background.js keeps working for one-click saves without the dialog.
+ *
+ * #69: open from bookmarksCache first (≤2–3s to actionable), then soft-sync
+ * with a conditional GET so large libraries do not block the Save button.
  */
 
 var THEME_KEY = "davflare-theme";
 var LAST_FOLDER_KEY = "popupLastFolder";
+var CACHE_KEY = "bookmarksCache";
 
 var COPY = {
   en: {
@@ -25,11 +29,13 @@ var COPY = {
     needConfig: "Configure your instance URL and WebDAV credentials in settings first.",
     goSettings: "Open settings",
     loading: "Loading library…",
+    syncing: "Updating library…",
     retry: "Retry",
     errDisabled: "WebDAV is disabled on this instance.",
     errNotConfigured: "The server has no WebDAV credentials configured.",
     errUnauthorized: "Wrong WebDAV username or password. Check settings.",
     errNetwork: "Cannot reach the instance.",
+    errTimeout: "The instance timed out (large library or slow network). Try again.",
     errConflict: "The library changed elsewhere — reloaded, please save again.",
     errOther: "The instance returned an unexpected response.",
     home: "Open Davflare",
@@ -48,11 +54,13 @@ var COPY = {
     needConfig: "请先在「设置」里配置实例地址与 WebDAV 凭据。",
     goSettings: "去设置",
     loading: "正在读取书签库…",
+    syncing: "正在同步书签库…",
     retry: "重试",
     errDisabled: "该实例已关闭 WebDAV。",
     errNotConfigured: "服务端未配置 WebDAV 凭据。",
     errUnauthorized: "WebDAV 用户名或密码错误，请在设置里检查。",
     errNetwork: "无法连接实例。",
+    errTimeout: "实例响应超时（库较大或网络慢），请重试。",
     errConflict: "书签库已在别处更新——已重新加载，请再点一次收藏。",
     errOther: "实例返回了未预期的响应。",
     home: "插件主页",
@@ -65,6 +73,7 @@ var ERROR_KEY = {
   notConfigured: "errNotConfigured",
   unauthorized: "errUnauthorized",
   network: "errNetwork",
+  timeout: "errTimeout",
   conflict: "errConflict",
 };
 
@@ -77,6 +86,7 @@ var state = {
   etag: null,
   exists: false,
   ready: false,
+  syncing: false,
 };
 
 function $(id) {
@@ -89,7 +99,14 @@ function pickLang() {
 
 function errorText(kind) {
   var key = ERROR_KEY[kind];
-  return key ? state.t[key] : state.t.errOther;
+  if (key) return state.t[key];
+  if (kind && String(kind).indexOf("http") === 0) {
+    var code = String(kind).slice(4);
+    return state.lang === "zh"
+      ? "实例返回了未预期的响应（HTTP " + code + "）。"
+      : "Unexpected response from the instance (HTTP " + code + ").";
+  }
+  return state.t.errOther;
 }
 
 function applyTheme() {
@@ -177,31 +194,39 @@ function setSaveEnabled(enabled, label) {
   btn.textContent = label;
 }
 
-/**
- * GET + parse the remote library. Fills the folder datalist, re-checks
- * "already saved", and decides whether the save button is usable. User-typed
- * inputs (title/folder/tags) are left alone unless prefillTitle is set.
- */
-async function loadModel(opts) {
-  var options = opts || {};
-  state.ready = false;
-  setSaveEnabled(false, state.t.save);
-  if (options.prefillTitle) setStatus(state.t.loading);
-  var client = DavflareDav.createDavClient(options.cfg);
-  var res = await client.getBookmarks();
-  if (!res.ok) {
-    showNotice(errorText(res.kind), state.t.retry, function () {
-      init();
-    });
-    return;
-  }
+function writeCache(model, etag) {
+  var normalized = Bookmarks.normalizeModel(model);
+  var payload = {};
+  payload[CACHE_KEY] = {
+    model: normalized,
+    etag: etag || null,
+    syncedAt: Date.now(),
+    bytes:
+      Bookmarks.serializeHtml(normalized).length +
+      Bookmarks.modelToJsonText(normalized).length,
+  };
+  chrome.storage.local.set(payload, function () {
+    void chrome.runtime.lastError;
+  });
+}
+
+function parseRemoteLibrary(res) {
   var model = Bookmarks.parseHtml(res.html || "");
   if (res.jsonText) {
     var parsed = Bookmarks.modelFromJson(res.jsonText);
     if (parsed.ok) model = Bookmarks.adoptRichFields(model, parsed.model);
   }
+  return model;
+}
+
+/**
+ * Apply a loaded model to the form (folders, exists, save button).
+ * User-typed inputs are left alone unless prefill* flags are set.
+ */
+async function applyLoadedModel(model, etag, options) {
+  var opts = options || {};
   state.model = model;
-  state.etag = res.etag;
+  state.etag = etag || null;
 
   var folders = Bookmarks.folderPaths(model);
   var datalist = $("folderOptions");
@@ -220,10 +245,10 @@ async function loadModel(opts) {
       })
   );
 
-  if (options.prefillTitle && !$("saveTitle").value) {
+  if (opts.prefillTitle && !$("saveTitle").value) {
     $("saveTitle").value = (state.tab && state.tab.title) || state.url;
   }
-  if (options.prefillFolder && !$("saveFolder").value) {
+  if (opts.prefillFolder && !$("saveFolder").value) {
     var stored = await chrome.storage.local.get([LAST_FOLDER_KEY]);
     var last = stored && typeof stored[LAST_FOLDER_KEY] === "string" ? stored[LAST_FOLDER_KEY] : "";
     if (Bookmarks.folderPaths(model).indexOf(last) !== -1) {
@@ -235,9 +260,67 @@ async function loadModel(opts) {
   if (state.exists) {
     setStatus(state.t.exists, "ok");
     setSaveEnabled(false, state.t.exists);
+    state.ready = false;
   } else {
     state.ready = true;
     setSaveEnabled(true, state.t.save);
+    if (!state.syncing) setStatus("");
+  }
+}
+
+/**
+ * Full remote GET + parse. Used when there is no usable cache.
+ */
+async function loadModel(opts) {
+  var options = opts || {};
+  state.ready = false;
+  setSaveEnabled(false, state.t.save);
+  if (options.prefillTitle) setStatus(state.t.loading);
+  var client = DavflareDav.createDavClient(options.cfg);
+  var res = await client.getBookmarks();
+  if (!res.ok) {
+    showNotice(errorText(res.kind), state.t.retry, function () {
+      init();
+    });
+    return;
+  }
+  var model = parseRemoteLibrary(res);
+  writeCache(model, res.etag || null);
+  await applyLoadedModel(model, res.etag || null, options);
+}
+
+/**
+ * Background revalidation (#69): If-None-Match when we have an etag so large
+ * libraries stay cheap on the happy path. Failures are non-blocking when the
+ * form is already usable from cache.
+ */
+async function softSync(cfg) {
+  state.syncing = true;
+  if (state.ready && !state.exists) setStatus(state.t.syncing);
+  try {
+    var client = DavflareDav.createDavClient(cfg);
+    var opts = state.etag ? { ifNoneMatch: state.etag } : {};
+    var res = await client.getBookmarks(opts);
+    if (!res.ok) {
+      if (!state.model) {
+        showNotice(errorText(res.kind), state.t.retry, function () {
+          init();
+        });
+      } else if (state.ready && !state.exists) {
+        setStatus("");
+      }
+      return;
+    }
+    if (res.notModified) {
+      if (state.ready && !state.exists) setStatus("");
+      return;
+    }
+    var model = parseRemoteLibrary(res);
+    writeCache(model, res.etag || null);
+    // Refresh exists / folders; keep whatever the user already typed.
+    await applyLoadedModel(model, res.etag || null, {});
+  } finally {
+    state.syncing = false;
   }
 }
 
@@ -293,7 +376,9 @@ async function saveCurrent(event) {
     return;
   }
   state.model = add.model;
+  state.etag = put.etag || null;
   state.exists = true;
+  writeCache(add.model, put.etag || null);
   setStatus(state.t.saved, "ok");
   setSaveEnabled(false, state.t.saved);
   chrome.storage.local.set({ popupLastFolder: folder }, function () {
@@ -350,6 +435,18 @@ async function init() {
     showNotice(t.needConfig, t.goSettings, function () {
       openShell("settings");
     });
+    return;
+  }
+
+  // Cache-first (#69): enable Save from local library, then soft-sync.
+  var stored = await chrome.storage.local.get([CACHE_KEY]);
+  var cache = stored && stored[CACHE_KEY];
+  if (cache && cache.model) {
+    await applyLoadedModel(Bookmarks.normalizeModel(cache.model), cache.etag || null, {
+      prefillTitle: true,
+      prefillFolder: true,
+    });
+    softSync(cfg);
     return;
   }
 

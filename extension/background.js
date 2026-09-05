@@ -4,6 +4,7 @@ importScripts("url.js", "bookmarks.js", "dav.js");
 
 var MENU_SAVE = "davflare-save-page";
 var MENU_MODE = "davflare-toggle-mode";
+var CACHE_KEY = "bookmarksCache";
 
 var MESSAGES = {
   en: {
@@ -12,6 +13,7 @@ var MESSAGES = {
     saveOk: "Bookmark saved to your library.",
     saveExists: "This page is already in your library.",
     skipPage: "Only http(s) pages can be saved.",
+    needConfig: "Configure your instance URL and WebDAV credentials in settings first.",
     modeTitle: "Default home view switched",
     modeDrive: "The home page will open your drive.",
     modeBookmarks: "The home page will open your bookmark library.",
@@ -22,6 +24,7 @@ var MESSAGES = {
     saveOk: "已收藏到书签库。",
     saveExists: "该页面已在书签库中。",
     skipPage: "只能收藏 http(s) 页面。",
+    needConfig: "请先在设置里配置实例地址与 WebDAV 凭据。",
     modeTitle: "主页默认视图已切换",
     modeDrive: "插件主页将打开网盘。",
     modeBookmarks: "插件主页将打开书签库。",
@@ -39,6 +42,10 @@ var ERROR_COPY = {
     zh: "WebDAV 用户名或密码错误，请在书签库的设置里检查。",
   },
   network: { en: "Cannot reach the instance.", zh: "无法连接实例。" },
+  timeout: {
+    en: "The instance timed out (large library or slow network). Try again.",
+    zh: "实例响应超时（库较大或网络慢），请重试。",
+  },
   conflict: {
     en: "The library changed elsewhere. Please retry.",
     zh: "书签库已在别处更新，请重试。",
@@ -55,24 +62,40 @@ function t() {
 
 function errorText(kind) {
   var known = ERROR_COPY[kind];
-  return known ? known[pickLang()] : "HTTP " + kind;
+  if (known) return known[pickLang()];
+  if (kind && String(kind).indexOf("http") === 0) {
+    var code = String(kind).slice(4);
+    return pickLang() === "zh"
+      ? "实例返回了未预期的响应（HTTP " + code + "）。"
+      : "Unexpected response from the instance (HTTP " + code + ").";
+  }
+  return pickLang() === "zh"
+    ? "实例返回了未预期的响应。"
+    : "Unexpected response from the instance.";
 }
 
 function flashBadge(text) {
-  chrome.action.setBadgeText({ text: text });
-  setTimeout(function () {
-    chrome.action.setBadgeText({ text: "" });
-  }, 2500);
+  try {
+    chrome.action.setBadgeBackgroundColor({ color: text === "!" ? "#c62828" : "#2e7d32" });
+    chrome.action.setBadgeText({ text: text });
+    setTimeout(function () {
+      chrome.action.setBadgeText({ text: "" });
+    }, 2500);
+  } catch (err) {
+    /* badge is best-effort */
+  }
 }
 
 function notify(title, message) {
   try {
     chrome.notifications.create(
+      "davflare-save-" + String(Date.now()),
       {
         type: "basic",
-        iconUrl: "icons/icon128.png",
+        iconUrl: chrome.runtime.getURL("icons/icon128.png"),
         title: title,
         message: message,
+        priority: 2,
       },
       function () {
         void chrome.runtime.lastError;
@@ -81,6 +104,16 @@ function notify(title, message) {
   } catch (err) {
     /* notifications are best-effort feedback */
   }
+}
+
+function failFeedback(message) {
+  flashBadge("!");
+  notify(t().errTitle, message);
+}
+
+function okFeedback(message) {
+  flashBadge("✓");
+  notify(t().appTitle, message);
 }
 
 async function loadConfig() {
@@ -95,6 +128,36 @@ async function loadConfig() {
   };
 }
 
+async function readBookmarksCache() {
+  var stored = await chrome.storage.local.get([CACHE_KEY]);
+  var cache = stored && stored[CACHE_KEY];
+  if (!cache || !cache.model) return null;
+  return cache;
+}
+
+async function writeBookmarksCache(model, etag) {
+  var normalized = Bookmarks.normalizeModel(model);
+  var payload = {};
+  payload[CACHE_KEY] = {
+    model: normalized,
+    etag: etag || null,
+    syncedAt: Date.now(),
+    bytes:
+      Bookmarks.serializeHtml(normalized).length +
+      Bookmarks.modelToJsonText(normalized).length,
+  };
+  await chrome.storage.local.set(payload);
+}
+
+function parseRemoteLibrary(res) {
+  var model = Bookmarks.parseHtml(res.html || "");
+  if (res.jsonText) {
+    var parsed = Bookmarks.modelFromJson(res.jsonText);
+    if (parsed.ok) model = Bookmarks.adoptRichFields(model, parsed.model);
+  }
+  return model;
+}
+
 async function toggleDefaultMode() {
   var stored = await chrome.storage.sync.get(["toolbarMode"]);
   var next = mergeSettings(stored).toolbarMode === "bookmarks" ? "drive" : "bookmarks";
@@ -103,32 +166,77 @@ async function toggleDefaultMode() {
   notify(copy.modeTitle, next === "bookmarks" ? copy.modeBookmarks : copy.modeDrive);
 }
 
+/**
+ * Context-menu / fallback quick-save (#68).
+ *
+ * MV3 service workers are killed if the click listener does not return the
+ * async work as a Promise — previously savePage was fire-and-forget, so a
+ * large-library GET could be aborted mid-flight with no notification and no
+ * write. We also prefer the local bookmarksCache (+ etag) so the common path
+ * does not wait on a full Netscape re-download before PUT.
+ */
 async function savePage(tab) {
   var copy = t();
+  flashBadge("…");
   var url = (tab && tab.url) || "";
   var title = (tab && tab.title) || "";
   if (!Bookmarks.isWebUrl(url)) {
-    flashBadge("!");
-    notify(copy.errTitle, copy.skipPage);
-    return;
-  }
-  var client = DavflareDav.createDavClient(await loadConfig());
-  var res = await client.getBookmarks();
-  if (!res.ok) {
-    flashBadge("!");
-    notify(copy.errTitle, errorText(res.kind));
+    failFeedback(copy.skipPage);
     return;
   }
 
-  var model = Bookmarks.parseHtml(res.html || "");
-  if (res.jsonText) {
-    var parsed = Bookmarks.modelFromJson(res.jsonText);
-    if (parsed.ok) model = Bookmarks.adoptRichFields(model, parsed.model);
+  var cfg = await loadConfig();
+  if (!cfg.instanceUrl) {
+    failFeedback(copy.needConfig);
+    return;
   }
+
+  var client = DavflareDav.createDavClient(cfg);
+  var cache = await readBookmarksCache();
+  var cachedModel = cache && cache.model ? Bookmarks.normalizeModel(cache.model) : null;
+  var cachedEtag = cache && cache.etag ? cache.etag : null;
+
+  if (cachedModel) {
+    var early = Bookmarks.addBookmark(cachedModel, {
+      title: title,
+      url: url,
+      added: Date.now(),
+    });
+    if (!early.added) {
+      okFeedback(copy.saveExists);
+      return;
+    }
+
+    // Fast path: PUT against the cached etag (If-Match). Conflict → re-GET.
+    if (cachedEtag) {
+      var putCached = await client.putBookmarks({
+        html: Bookmarks.serializeHtml(early.model),
+        json: Bookmarks.modelToJsonText(early.model),
+        etag: cachedEtag,
+      });
+      if (putCached.ok) {
+        await writeBookmarksCache(early.model, putCached.etag || null);
+        okFeedback(copy.saveOk);
+        return;
+      }
+      if (putCached.kind !== "conflict") {
+        failFeedback(errorText(putCached.kind));
+        return;
+      }
+    }
+  }
+
+  var res = await client.getBookmarks();
+  if (!res.ok) {
+    failFeedback(errorText(res.kind));
+    return;
+  }
+
+  var model = parseRemoteLibrary(res);
   var add = Bookmarks.addBookmark(model, { title: title, url: url, added: Date.now() });
   if (!add.added) {
-    flashBadge("✓");
-    notify(copy.appTitle, copy.saveExists);
+    await writeBookmarksCache(model, res.etag || null);
+    okFeedback(copy.saveExists);
     return;
   }
 
@@ -138,12 +246,11 @@ async function savePage(tab) {
     etag: res.etag,
   });
   if (!put.ok) {
-    flashBadge("!");
-    notify(copy.errTitle, errorText(put.kind));
+    failFeedback(errorText(put.kind));
     return;
   }
-  flashBadge("✓");
-  notify(copy.appTitle, copy.saveOk);
+  await writeBookmarksCache(add.model, put.etag || null);
+  okFeedback(copy.saveOk);
 }
 
 // 工具栏左键点击由 popup.html（收藏弹窗）接管；右键菜单保留一键收藏与主页默认视图切换。
@@ -168,13 +275,12 @@ async function quickSaveCurrentPage() {
 }
 
 chrome.commands.onCommand.addListener(function (command) {
-  if (command === "save-current-page") quickSaveCurrentPage();
+  if (command === "save-current-page") return quickSaveCurrentPage();
 });
 
 /* ---------- omnibox (#62 P1): "df <query>" searches the cached library ---------- */
 
 var OMNI_LIMIT = 6;
-var CACHE_KEY = "bookmarksCache";
 
 function xmlEscape(text) {
   return String(text == null ? "" : text)
@@ -185,8 +291,7 @@ function xmlEscape(text) {
 }
 
 async function cachedBookmarksModel() {
-  var stored = await chrome.storage.local.get([CACHE_KEY]);
-  var cache = stored && stored[CACHE_KEY];
+  var cache = await readBookmarksCache();
   return cache && cache.model ? cache.model : { bookmarks: [] };
 }
 
@@ -258,36 +363,42 @@ chrome.omnibox.onInputEntered.addListener(async function (text, disposition) {
   }
 });
 
+// Return the Promise so MV3 keeps the service worker alive until save finishes (#68).
 chrome.contextMenus.onClicked.addListener(function (info, tab) {
   if (info.menuItemId === MENU_MODE) {
-    toggleDefaultMode();
-    return;
+    return toggleDefaultMode();
   }
   if (info.menuItemId === MENU_SAVE) {
-    savePage(tab);
+    return savePage(tab);
   }
 });
 
-chrome.runtime.onInstalled.addListener(function () {
+function ensureContextMenus() {
   var zh = pickLang() === "zh";
-  chrome.contextMenus.create(
-    {
-      id: MENU_SAVE,
-      title: zh ? "收藏此页到 Davflare" : "Save page to Davflare",
-      contexts: ["page"],
-    },
-    function () {
-      void chrome.runtime.lastError;
-    }
-  );
-  chrome.contextMenus.create(
-    {
-      id: MENU_MODE,
-      title: zh ? "切换插件主页默认视图" : "Switch default home view",
-      contexts: ["action"],
-    },
-    function () {
-      void chrome.runtime.lastError;
-    }
-  );
-});
+  chrome.contextMenus.removeAll(function () {
+    void chrome.runtime.lastError;
+    chrome.contextMenus.create(
+      {
+        id: MENU_SAVE,
+        title: zh ? "收藏此页到 Davflare" : "Save page to Davflare",
+        contexts: ["page"],
+      },
+      function () {
+        void chrome.runtime.lastError;
+      }
+    );
+    chrome.contextMenus.create(
+      {
+        id: MENU_MODE,
+        title: zh ? "切换插件主页默认视图" : "Switch default home view",
+        contexts: ["action"],
+      },
+      function () {
+        void chrome.runtime.lastError;
+      }
+    );
+  });
+}
+
+chrome.runtime.onInstalled.addListener(ensureContextMenus);
+chrome.runtime.onStartup.addListener(ensureContextMenus);

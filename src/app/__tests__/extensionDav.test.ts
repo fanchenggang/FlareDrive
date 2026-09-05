@@ -6,8 +6,8 @@ const DavflareDav = nodeRequire("../../../extension/dav.js") as {
   createDavClient: (options: Record<string, unknown>) => {
     deleteFile: (fileName: string) => Promise<Resolved>;
     ensureDir: () => Promise<Resolved>;
-    getBookmarks: () => Promise<Resolved>;
-    getFile: (fileName: string) => Promise<Resolved>;
+    getBookmarks: (options?: Record<string, unknown>) => Promise<Resolved>;
+    getFile: (fileName: string, options?: Record<string, unknown>) => Promise<Resolved>;
     paths: { root: string; dir: string; html: string; json: string };
     probe: () => Promise<Resolved>;
     putBookmarks: (payload: Record<string, unknown>) => Promise<Resolved>;
@@ -94,7 +94,7 @@ describe("extension/dav.js request basics", () => {
       password: "p",
       fetchImpl: fetchMock(() => ({ status: 207 })).fetch,
     });
-    expect(await noUrl.probe()).toEqual({ ok: false, kind: "network" });
+    expect(await noUrl.probe()).toMatchObject({ ok: false, kind: "network" });
 
     const { client } = clientWith(
       {
@@ -178,7 +178,7 @@ describe("extension/dav.js ensureDir nested basePath (issue #60)", () => {
     });
     expect(
       await client.putBookmarks({ html: "<DL><p></DL><p>", json: '{"bookmarks":[]}' })
-    ).toEqual({ ok: true, jsonSaved: true });
+    ).toEqual({ ok: true, jsonSaved: true, etag: null });
     expect(calls.map((c) => (c.init.method as string) + " " + c.url)).toEqual([
       "MKCOL " + ROOT + "/_pm_qa/",
       "MKCOL " + nestedDir,
@@ -195,7 +195,7 @@ describe("extension/dav.js ensureDir nested basePath (issue #60)", () => {
     });
     expect(
       await client.putFile("snapshots/s1.html", "<html></html>", "text/html; charset=utf-8")
-    ).toEqual({ ok: true });
+    ).toEqual({ ok: true, etag: null });
     expect(calls.map((c) => (c.init.method as string) + " " + c.url)).toEqual([
       "MKCOL " + ROOT + "/a/",
       "MKCOL " + nestedDir,
@@ -233,10 +233,10 @@ describe("extension/dav.js probe", () => {
     expect(await disabled.client.probe()).toEqual({ ok: false, kind: "disabled" });
 
     const unauthorized = clientWith({}, () => ({ status: 401 }));
-    expect(await unauthorized.client.probe()).toEqual({ ok: false, kind: "unauthorized" });
+    expect(await unauthorized.client.probe()).toMatchObject({ ok: false, kind: "unauthorized" });
 
     const notConfigured = clientWith({}, () => ({ status: 403 }));
-    expect(await notConfigured.client.probe()).toEqual({
+    expect(await notConfigured.client.probe()).toMatchObject({
       ok: false,
       kind: "notConfigured",
     });
@@ -269,7 +269,7 @@ describe("extension/dav.js getBookmarks", () => {
     });
     const res = await client.getBookmarks();
     expect(res).toMatchObject({ ok: true, missing: true, html: "" });
-    expect(calls[1].init.method).toBe("PROPFIND");
+    expect(calls.some((c) => c.init.method === "PROPFIND")).toBe(true);
   });
 
   test("a 404 everywhere means the webdav flag is off", async () => {
@@ -279,12 +279,12 @@ describe("extension/dav.js getBookmarks", () => {
 
   test("auth failures surface as unauthorized / notConfigured", async () => {
     const unauthorized = clientWith({}, () => ({ status: 401 }));
-    expect(await unauthorized.client.getBookmarks()).toEqual({
+    expect(await unauthorized.client.getBookmarks()).toMatchObject({
       ok: false,
       kind: "unauthorized",
     });
     const notConfigured = clientWith({}, () => ({ status: 403 }));
-    expect(await notConfigured.client.getBookmarks()).toEqual({
+    expect(await notConfigured.client.getBookmarks()).toMatchObject({
       ok: false,
       kind: "notConfigured",
     });
@@ -304,7 +304,7 @@ describe("extension/dav.js putBookmarks", () => {
       json: '{"bookmarks":[]}',
       etag: '"etag-1"',
     });
-    expect(res).toEqual({ ok: true, jsonSaved: true });
+    expect(res).toEqual({ ok: true, jsonSaved: true, etag: null });
 
     const methods = calls.map((c) => (c.init.method as string) + " " + c.url);
     expect(methods).toEqual([
@@ -344,6 +344,7 @@ describe("extension/dav.js putBookmarks", () => {
     expect(await client.putBookmarks({ html: "x", json: "{}" })).toEqual({
       ok: true,
       jsonSaved: false,
+      etag: null,
     });
   });
 
@@ -408,6 +409,7 @@ describe("extension/dav.js generic getFile / putFile", () => {
     const { client, calls } = clientWith({}, () => ({ status: 204 }));
     expect(await client.putFile("workspaces.json", "[]", "application/json")).toEqual({
       ok: true,
+      etag: null,
     });
     expect((calls[1].init.headers as Record<string, string>)["If-Match"]).toBeUndefined();
   });
@@ -419,7 +421,7 @@ describe("extension/dav.js generic getFile / putFile", () => {
     });
     expect(
       await client.putFile("snapshots/snap-1.html", "<html></html>", "text/html; charset=utf-8")
-    ).toEqual({ ok: true });
+    ).toEqual({ ok: true, etag: null });
     expect(calls.map((c) => c.init.method + " " + c.url)).toEqual([
       "MKCOL " + DIR,
       "MKCOL " + DIR + "snapshots/",
@@ -437,7 +439,7 @@ describe("extension/dav.js deleteFile", () => {
     expect(await missing.client.deleteFile("snapshots/snap-1.html")).toEqual({ ok: true });
 
     const denied = clientWith({}, () => ({ status: 401 }));
-    expect(await denied.client.deleteFile("snapshots/snap-1.html")).toEqual({
+    expect(await denied.client.deleteFile("snapshots/snap-1.html")).toMatchObject({
       ok: false,
       kind: "unauthorized",
     });
@@ -446,6 +448,91 @@ describe("extension/dav.js deleteFile", () => {
     expect(await offline.client.deleteFile("snapshots/snap-1.html")).toEqual({
       ok: false,
       kind: "network",
+    });
+  });
+});
+
+
+describe("extension/dav.js large-library helpers (#68/#69)", () => {
+  test("getBookmarks fetches html and json in parallel", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const { client, calls } = clientWith({}, async (url) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 20));
+      inFlight -= 1;
+      return url.endsWith("bookmarks.html")
+        ? { status: 200, body: "<DL><p></DL><p>", etag: '"e1"' }
+        : { status: 200, body: '{"bookmarks":[]}' };
+    });
+    const res = await client.getBookmarks();
+    expect(res.ok).toBe(true);
+    expect(maxInFlight).toBeGreaterThanOrEqual(2);
+    expect(calls.map((c) => c.url).sort()).toEqual(
+      [DIR + "bookmarks.html", DIR + "bookmarks.json"].sort()
+    );
+  });
+
+  test("getBookmarks honors If-None-Match and returns notModified on 304", async () => {
+    const { client, calls } = clientWith({}, () => ({ status: 304, etag: '"abc"' }));
+    const res = await client.getBookmarks({ ifNoneMatch: '"abc"' });
+    expect(res).toMatchObject({ ok: true, notModified: true, etag: '"abc"' });
+    const headers = calls[0].init.headers as Record<string, string>;
+    expect(headers["If-None-Match"]).toBe('"abc"');
+  });
+
+  test("request abort maps to timeout kind", async () => {
+    const mock = fetchMock(async (_url, init) => {
+      await new Promise<void>((_resolve, reject) => {
+        const signal = init.signal as AbortSignal | undefined;
+        if (!signal) {
+          reject(new Error("missing signal"));
+          return;
+        }
+        if (signal.aborted) {
+          const err = new Error("aborted");
+          (err as Error & { name: string }).name = "AbortError";
+          reject(err);
+          return;
+        }
+        signal.addEventListener("abort", () => {
+          const err = new Error("aborted");
+          (err as Error & { name: string }).name = "AbortError";
+          reject(err);
+        });
+      });
+      return { status: 200 };
+    });
+    const client = DavflareDav.createDavClient({
+      instanceUrl: "https://drive.example",
+      username: "walter",
+      password: "s3cret",
+      fetchImpl: mock.fetch,
+      timeoutMs: 40,
+    });
+    expect(await client.getBookmarks()).toEqual({ ok: false, kind: "timeout" });
+  });
+
+  test("putBookmarks returns response etag when present", async () => {
+    const { client } = clientWith({}, (url, init) => {
+      if ((init.method as string) === "MKCOL") return { status: 405 };
+      if (url.endsWith("bookmarks.html")) return { status: 204, etag: '"new"' };
+      return { status: 204 };
+    });
+    expect(await client.putBookmarks({ html: "x", json: "{}" })).toEqual({
+      ok: true,
+      jsonSaved: true,
+      etag: '"new"',
+    });
+  });
+
+  test("5xx surfaces as httpNNN so UI can show the status code", async () => {
+    const { client } = clientWith({}, () => ({ status: 524, body: "timeout" }));
+    expect(await client.getBookmarks()).toEqual({
+      ok: false,
+      kind: "http524",
+      status: 524,
     });
   });
 });
