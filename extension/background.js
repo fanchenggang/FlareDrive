@@ -50,6 +50,10 @@ var ERROR_COPY = {
     en: "The library changed elsewhere. Please retry.",
     zh: "书签库已在别处更新，请重试。",
   },
+  unexpected: {
+    en: "Something went wrong while saving. Please retry.",
+    zh: "收藏时出错，请重试。",
+  },
 };
 
 function pickLang() {
@@ -136,17 +140,23 @@ async function readBookmarksCache() {
 }
 
 async function writeBookmarksCache(model, etag) {
-  var normalized = Bookmarks.normalizeModel(model);
-  var payload = {};
-  payload[CACHE_KEY] = {
-    model: normalized,
-    etag: etag || null,
-    syncedAt: Date.now(),
-    bytes:
-      Bookmarks.serializeHtml(normalized).length +
-      Bookmarks.modelToJsonText(normalized).length,
-  };
-  await chrome.storage.local.set(payload);
+  // Best-effort like the popup (#73): large libraries can exceed storage
+  // quota; never throw into savePage and abort the WebDAV write.
+  try {
+    var normalized = Bookmarks.normalizeModel(model);
+    var payload = {};
+    payload[CACHE_KEY] = {
+      model: normalized,
+      etag: etag || null,
+      syncedAt: Date.now(),
+      bytes:
+        Bookmarks.serializeHtml(normalized).length +
+        Bookmarks.modelToJsonText(normalized).length,
+    };
+    await chrome.storage.local.set(payload);
+  } catch (err) {
+    /* ignore — remote write must still proceed / report its own result */
+  }
 }
 
 function parseRemoteLibrary(res) {
@@ -167,7 +177,7 @@ async function toggleDefaultMode() {
 }
 
 /**
- * Context-menu / fallback quick-save (#68 / #71).
+ * Context-menu / fallback quick-save (#68 / #71 / #73).
  *
  * MV3 service workers are killed if the click listener does not return the
  * async work as a Promise — previously savePage was fire-and-forget, so a
@@ -175,39 +185,47 @@ async function toggleDefaultMode() {
  * write. We prefer the local bookmarksCache (+ etag) for a fast PUT, and on
  * 412 we re-GET the latest etag, merge, and retry PUT once (#71) so a stale
  * If-Match from cache does not leave the user with only a conflict toast.
+ *
+ * #73: wrap the whole body in try/catch so an unexpected throw after
+ * flashBadge("…") still reaches failFeedback (badge + notification) instead
+ * of dying silently when the SW tears down a rejected listener Promise.
  */
 async function savePage(tab) {
   var copy = t();
   flashBadge("…");
-  var url = (tab && tab.url) || "";
-  var title = (tab && tab.title) || "";
-  if (!Bookmarks.isWebUrl(url)) {
-    failFeedback(copy.skipPage);
-    return;
-  }
+  try {
+    var url = (tab && tab.url) || "";
+    var title = (tab && tab.title) || "";
+    if (!Bookmarks.isWebUrl(url)) {
+      failFeedback(copy.skipPage);
+      return;
+    }
 
-  var cfg = await loadConfig();
-  if (!cfg.instanceUrl) {
-    failFeedback(copy.needConfig);
-    return;
-  }
+    var cfg = await loadConfig();
+    if (!cfg.instanceUrl) {
+      failFeedback(copy.needConfig);
+      return;
+    }
 
-  var result = await DavflareQuickSave.saveBookmark(
-    {
-      client: DavflareDav.createDavClient(cfg),
-      Bookmarks: Bookmarks,
-      readCache: readBookmarksCache,
-      writeCache: writeBookmarksCache,
-      parseRemote: parseRemoteLibrary,
-    },
-    { title: title, url: url, added: Date.now() }
-  );
+    var result = await DavflareQuickSave.saveBookmark(
+      {
+        client: DavflareDav.createDavClient(cfg),
+        Bookmarks: Bookmarks,
+        readCache: readBookmarksCache,
+        writeCache: writeBookmarksCache,
+        parseRemote: parseRemoteLibrary,
+      },
+      { title: title, url: url, added: Date.now() }
+    );
 
-  if (result.ok) {
-    okFeedback(result.status === "exists" ? copy.saveExists : copy.saveOk);
-    return;
+    if (result.ok) {
+      okFeedback(result.status === "exists" ? copy.saveExists : copy.saveOk);
+      return;
+    }
+    failFeedback(errorText(result.kind));
+  } catch (err) {
+    failFeedback(errorText("unexpected"));
   }
-  failFeedback(errorText(result.kind));
 }
 
 /**
@@ -318,7 +336,9 @@ chrome.omnibox.onInputEntered.addListener(async function (text, disposition) {
   }
 });
 
-// Return the Promise so MV3 keeps the service worker alive until save finishes (#68).
+// Return the Promise from the listener so MV3 keeps the service worker alive
+// for the full async write + badge/notification (#68 / #73). Do not fire-and-
+// forget savePage — a discarded Promise lets Chrome kill the SW mid-flight.
 chrome.contextMenus.onClicked.addListener(function (info, tab) {
   if (info.menuItemId === MENU_MODE) {
     return toggleDefaultMode();

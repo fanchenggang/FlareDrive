@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * Context-menu / silent quick-save core (#71).
+ * Context-menu / silent quick-save core (#71 / #73).
  *
  * Separated from background.js so vitest can exercise the 412→re-GET→merge→
  * retry PUT loop without Chrome APIs. background.js only maps the result to
@@ -10,6 +10,19 @@
  * Plain script with a module.exports guard so vitest can require() it.
  */
 var DavflareQuickSave = (function () {
+  /**
+   * Cache writes are best-effort (#73). On a large library, chrome.storage.local
+   * may reject (quota / serialization). Never let that abort the WebDAV PUT —
+   * the popup path already ignores storage errors the same way.
+   */
+  async function safeWriteCache(writeCache, model, etag) {
+    try {
+      await writeCache(model, etag);
+    } catch (err) {
+      /* ignore — remote write must still proceed */
+    }
+  }
+
   /**
    * Persist one bookmark via WebDAV.
    *
@@ -64,7 +77,7 @@ var DavflareQuickSave = (function () {
           etag: cachedEtag,
         });
         if (putCached.ok) {
-          await writeCache(early.model, putCached.etag || null);
+          await safeWriteCache(writeCache, early.model, putCached.etag || null);
           return { ok: true, status: "saved" };
         }
         if (putCached.kind !== "conflict") {
@@ -72,7 +85,7 @@ var DavflareQuickSave = (function () {
         }
         // Stale cache etag — drop it before the GET/merge loop so we never
         // keep serving a precondition that already failed (#71).
-        await writeCache(cachedModel, null);
+        await safeWriteCache(writeCache, cachedModel, null);
       }
     }
 
@@ -87,8 +100,8 @@ var DavflareQuickSave = (function () {
       var model = parseRemote(res);
       // Keep cache etag aligned with what we just observed remotely, even
       // before the PUT — so a later conflict path does not re-use a stale
-      // If-Match from bookmarksCache.
-      await writeCache(model, res.etag || null);
+      // If-Match from bookmarksCache. Best-effort: never block the PUT (#73).
+      await safeWriteCache(writeCache, model, res.etag || null);
 
       var add = Bookmarks.addBookmark(model, {
         title: title,
@@ -105,7 +118,7 @@ var DavflareQuickSave = (function () {
         etag: res.etag || null,
       });
       if (put.ok) {
-        await writeCache(add.model, put.etag || null);
+        await safeWriteCache(writeCache, add.model, put.etag || null);
         return { ok: true, status: "saved" };
       }
       if (put.kind !== "conflict") {
@@ -121,7 +134,7 @@ var DavflareQuickSave = (function () {
     return { ok: false, kind: "conflict" };
   }
 
-  return { saveBookmark: saveBookmark };
+  return { saveBookmark: saveBookmark, safeWriteCache: safeWriteCache };
 })();
 
 if (typeof module !== "undefined" && module.exports) {

@@ -121,6 +121,12 @@ describe("Davflare Chrome extension / default package", () => {
     expect(bg).toContain('importScripts("url.js", "bookmarks.js", "dav.js", "quickSave.js")');
     expect(bg).toContain("DavflareQuickSave.saveBookmark");
     expect(fs.existsSync(path.join(extDir, "quickSave.js"))).toBe(true);
+    // #73: savePage try/catch + return Promise from onClicked so MV3 SW stays alive
+    // and unexpected throws still reach failFeedback (badge + notification).
+    expect(bg).toMatch(/async function savePage\([\s\S]*?try\s*\{/);
+    expect(bg).toMatch(/catch\s*\([^)]*\)\s*\{\s*failFeedback\(/);
+    expect(bg).toContain("return savePage(tab)");
+    expect(bg).toContain("chrome.contextMenus.onClicked.addListener");
   });
 
   test("standalone options page is gone; settings live in the shell page", () => {

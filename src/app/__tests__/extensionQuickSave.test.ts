@@ -122,7 +122,7 @@ function makeDeps(options: {
   };
 }
 
-describe("extension/quickSave.js (#71 If-Match conflict retry)", () => {
+describe("extension/quickSave.js (#71 If-Match conflict retry / #73 cache harden)", () => {
   const page = {
     title: "New Page",
     url: "https://example.com/fresh",
@@ -218,5 +218,57 @@ describe("extension/quickSave.js (#71 If-Match conflict retry)", () => {
     expect(result).toEqual({ ok: true, status: "exists" });
     expect(harness.puts).toHaveLength(0);
     expect(harness.gets).toHaveLength(0);
+  });
+
+  test("writeCache throw after GET does not abort PUT (#73 large-library quota)", async () => {
+    let writes = 0;
+    const harness = makeDeps({
+      cache: null,
+      getSequence: [
+        {
+          ok: true,
+          html: htmlWith("https://example.com/a", "A"),
+          etag: '"e1"',
+        },
+      ],
+      putSequence: [{ ok: true, etag: '"after"' }],
+    });
+    const throwingWrite = async (model: unknown, etag: string | null) => {
+      writes += 1;
+      // First write (post-GET, pre-PUT) blows up — must not prevent PUT.
+      if (writes === 1) {
+        throw new Error("QuotaExceededError");
+      }
+      return harness.deps.writeCache(model, etag);
+    };
+
+    const result = await DavflareQuickSave.saveBookmark(
+      { ...harness.deps, writeCache: throwingWrite },
+      page
+    );
+    expect(result).toEqual({ ok: true, status: "saved" });
+    expect(harness.puts).toHaveLength(1);
+    expect(harness.puts[0].html).toContain("https://example.com/fresh");
+    expect(harness.puts[0].html).toContain("https://example.com/a");
+  });
+
+  test("writeCache throw after successful PUT still reports saved (#73)", async () => {
+    const harness = makeDeps({
+      cache: {
+        model: Bookmarks.normalizeModel(Bookmarks.emptyModel()),
+        etag: '"ok"',
+      },
+      getSequence: [],
+      putSequence: [{ ok: true, etag: '"written"' }],
+    });
+    const throwingWrite = async () => {
+      throw new Error("QuotaExceededError");
+    };
+    const result = await DavflareQuickSave.saveBookmark(
+      { ...harness.deps, writeCache: throwingWrite },
+      page
+    );
+    expect(result).toEqual({ ok: true, status: "saved" });
+    expect(harness.puts).toHaveLength(1);
   });
 });
