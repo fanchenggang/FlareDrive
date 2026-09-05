@@ -211,12 +211,7 @@ function writeCache(model, etag) {
 }
 
 function parseRemoteLibrary(res) {
-  var model = Bookmarks.parseHtml(res.html || "");
-  if (res.jsonText) {
-    var parsed = Bookmarks.modelFromJson(res.jsonText);
-    if (parsed.ok) model = Bookmarks.adoptRichFields(model, parsed.model);
-  }
-  return model;
+  return Bookmarks.parseRemoteLibrary(res);
 }
 
 /**
@@ -446,7 +441,12 @@ async function init() {
       prefillTitle: true,
       prefillFolder: true,
     });
-    softSync(cfg);
+    // #75 / #69: skip soft-sync when the cache was written recently so Save
+    // stays in the 2–3s path instead of re-downloading a large library.
+    var syncedAt = typeof cache.syncedAt === "number" ? cache.syncedAt : 0;
+    if (!syncedAt || Date.now() - syncedAt > 120000) {
+      softSync(cfg);
+    }
     return;
   }
 

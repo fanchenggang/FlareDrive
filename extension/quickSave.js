@@ -97,7 +97,18 @@ var DavflareQuickSave = (function () {
         return { ok: false, kind: res.kind || "network" };
       }
 
-      var model = parseRemote(res);
+      var model;
+      try {
+        model = parseRemote(res);
+      } catch (err) {
+        // #75: surface the real throw (e.g. legacy DOMParser miss) instead of
+        // a blind unexpected in savePage.
+        return {
+          ok: false,
+          kind: "unexpected",
+          message: err && err.message ? String(err.message) : String(err || ""),
+        };
+      }
       // Keep cache etag aligned with what we just observed remotely, even
       // before the PUT — so a later conflict path does not re-use a stale
       // If-Match from bookmarksCache. Best-effort: never block the PUT (#73).

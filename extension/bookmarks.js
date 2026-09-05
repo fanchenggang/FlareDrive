@@ -168,15 +168,129 @@ var Bookmarks = (function () {
     walkLevel(dl, path, out, { heading: null });
   }
 
-  function parseHtml(text) {
-    if (typeof DOMParser === "undefined") {
-      throw new Error("parseHtml requires DOMParser");
-    }
-    var doc = new DOMParser().parseFromString(String(text || ""), "text/html");
-    var rootDl = doc.querySelector("dl");
+  function decodeBasicEntities(value) {
+    return String(value == null ? "" : value)
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#(\d+);/g, function (_, n) {
+        return String.fromCharCode(parseInt(n, 10));
+      })
+      .replace(/&#x([0-9a-f]+);/gi, function (_, n) {
+        return String.fromCharCode(parseInt(n, 16));
+      });
+  }
+
+  /**
+   * Netscape HTML tokenizer for environments without DOMParser (MV3 service
+   * workers — #75). Mirrors walkLevel/collectLevel: Hn names the next A/DL at
+   * this level; nested DL inherits joinFolder(path, heading).
+   */
+  function parseHtmlFallback(text) {
+    var src = String(text || "");
     var out = [];
-    if (rootDl) collectLevel(rootDl, "", out);
+    var stack = [];
+    var pendingHeading = null;
+    var i = 0;
+
+    function currentPath() {
+      return stack.length ? stack[stack.length - 1] : "";
+    }
+
+    while (i < src.length) {
+      if (src.charAt(i) !== "<") {
+        var nextLt = src.indexOf("<", i + 1);
+        i = nextLt === -1 ? src.length : nextLt;
+        continue;
+      }
+      var slice = src.slice(i);
+      var mDlOpen = /^<DL\b[^>]*>/i.exec(slice);
+      if (mDlOpen) {
+        stack.push(joinFolder(currentPath(), pendingHeading));
+        pendingHeading = null;
+        i += mDlOpen[0].length;
+        continue;
+      }
+      var mDlClose = /^<\/DL\b[^>]*>/i.exec(slice);
+      if (mDlClose) {
+        if (stack.length) stack.pop();
+        pendingHeading = null;
+        i += mDlClose[0].length;
+        continue;
+      }
+      var mH = /^<H([2-5])\b[^>]*>([\s\S]*?)<\/H\1>/i.exec(slice);
+      if (mH) {
+        var heading = decodeBasicEntities(mH[2].replace(/<[^>]+>/g, "")).trim();
+        pendingHeading = heading || null;
+        i += mH[0].length;
+        continue;
+      }
+      var mA = /^<A\s+([^>]*)>([\s\S]*?)<\/A>/i.exec(slice);
+      if (mA) {
+        var attrs = mA[1];
+        var hrefM =
+          /\bHREF\s*=\s*"([^"]*)"/i.exec(attrs) ||
+          /\bHREF\s*=\s*'([^']*)'/i.exec(attrs) ||
+          /\bHREF\s*=\s*([^\s>]+)/i.exec(attrs);
+        var addM =
+          /\bADD_DATE\s*=\s*"([^"]*)"/i.exec(attrs) ||
+          /\bADD_DATE\s*=\s*'([^']*)'/i.exec(attrs) ||
+          /\bADD_DATE\s*=\s*([^\s>]+)/i.exec(attrs);
+        var href = hrefM ? decodeBasicEntities(hrefM[1]).trim() : "";
+        var title = decodeBasicEntities(mA[2].replace(/<[^>]+>/g, "")).trim();
+        if (isWebUrl(href)) {
+          var addRaw = addM ? parseInt(addM[1], 10) : NaN;
+          out.push(
+            sanitizeBookmark({
+              title: title,
+              url: href,
+              folder: joinFolder(currentPath(), pendingHeading),
+              added: isFinite(addRaw) && addRaw > 0 ? addRaw * 1000 : 0,
+            })
+          );
+        }
+        i += mA[0].length;
+        continue;
+      }
+      i += 1;
+    }
     return { version: MODEL_VERSION, bookmarks: out };
+  }
+
+  function parseHtml(text) {
+    if (typeof DOMParser !== "undefined") {
+      var doc = new DOMParser().parseFromString(String(text || ""), "text/html");
+      var rootDl = doc.querySelector("dl");
+      var out = [];
+      if (rootDl) collectLevel(rootDl, "", out);
+      return { version: MODEL_VERSION, bookmarks: out };
+    }
+    return parseHtmlFallback(text);
+  }
+
+  /**
+   * Build a model from a getBookmarks() response.
+   *
+   * Prefer the JSON sidecar when present — it is complete for Davflare writes
+   * and parses without DOMParser, which MV3 service workers lack (#75). When
+   * both HTML and JSON exist in a DOM context, keep html-wins membership and
+   * adopt rich fields from JSON (same as the library page).
+   */
+  function parseRemoteLibrary(res) {
+    res = res || {};
+    var jsonModel = null;
+    if (res.jsonText) {
+      var parsed = modelFromJson(res.jsonText);
+      if (parsed.ok) jsonModel = parsed.model;
+    }
+    var html = res.html || "";
+    if (jsonModel && html && typeof DOMParser !== "undefined") {
+      return adoptRichFields(parseHtml(html), jsonModel);
+    }
+    if (jsonModel) return jsonModel;
+    return parseHtml(html);
   }
 
   function buildTree(model) {
@@ -478,6 +592,7 @@ var Bookmarks = (function () {
     modelToJsonText: modelToJsonText,
     normalizeModel: normalizeModel,
     parseHtml: parseHtml,
+    parseRemoteLibrary: parseRemoteLibrary,
     removeBookmark: removeBookmark,
     searchBookmarks: searchBookmarks,
     serializeHtml: serializeHtml,
