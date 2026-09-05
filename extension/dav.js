@@ -72,6 +72,9 @@ var DavflareDav = (function () {
           method: method,
           headers: headers,
           body: extra.body,
+          // Avoid HTTP-cache serving a stale ETag after a 412 (#71). Extension
+          // SW fetch can otherwise re-GET an old body+etag and fail If-Match again.
+          cache: "no-store",
         };
         if (
           timeoutMs > 0 &&

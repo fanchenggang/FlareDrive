@@ -64,6 +64,12 @@ const ROOT = "https://drive.example/webdav";
 const DIR = ROOT + "/bookmarks/";
 
 describe("extension/dav.js request basics", () => {
+  test("fetch uses cache no-store so stale ETags cannot poison If-Match (#71)", async () => {
+    const { client, calls } = clientWith({}, () => ({ status: 207 }));
+    await client.probe();
+    expect(calls[0].init.cache).toBe("no-store");
+  });
+
   test("sends Basic auth to the /webdav endpoints", async () => {
     const { client, calls } = clientWith({}, () => ({ status: 207 }));
     await client.probe();

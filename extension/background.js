@@ -1,6 +1,6 @@
 "use strict";
 
-importScripts("url.js", "bookmarks.js", "dav.js");
+importScripts("url.js", "bookmarks.js", "dav.js", "quickSave.js");
 
 var MENU_SAVE = "davflare-save-page";
 var MENU_MODE = "davflare-toggle-mode";
@@ -167,13 +167,14 @@ async function toggleDefaultMode() {
 }
 
 /**
- * Context-menu / fallback quick-save (#68).
+ * Context-menu / fallback quick-save (#68 / #71).
  *
  * MV3 service workers are killed if the click listener does not return the
  * async work as a Promise — previously savePage was fire-and-forget, so a
  * large-library GET could be aborted mid-flight with no notification and no
- * write. We also prefer the local bookmarksCache (+ etag) so the common path
- * does not wait on a full Netscape re-download before PUT.
+ * write. We prefer the local bookmarksCache (+ etag) for a fast PUT, and on
+ * 412 we re-GET the latest etag, merge, and retry PUT once (#71) so a stale
+ * If-Match from cache does not leave the user with only a conflict toast.
  */
 async function savePage(tab) {
   var copy = t();
@@ -191,69 +192,23 @@ async function savePage(tab) {
     return;
   }
 
-  var client = DavflareDav.createDavClient(cfg);
-  var cache = await readBookmarksCache();
-  var cachedModel = cache && cache.model ? Bookmarks.normalizeModel(cache.model) : null;
-  var cachedEtag = cache && cache.etag ? cache.etag : null;
+  var result = await DavflareQuickSave.saveBookmark(
+    {
+      client: DavflareDav.createDavClient(cfg),
+      Bookmarks: Bookmarks,
+      readCache: readBookmarksCache,
+      writeCache: writeBookmarksCache,
+      parseRemote: parseRemoteLibrary,
+    },
+    { title: title, url: url, added: Date.now() }
+  );
 
-  if (cachedModel) {
-    var early = Bookmarks.addBookmark(cachedModel, {
-      title: title,
-      url: url,
-      added: Date.now(),
-    });
-    if (!early.added) {
-      okFeedback(copy.saveExists);
-      return;
-    }
-
-    // Fast path: PUT against the cached etag (If-Match). Conflict → re-GET.
-    if (cachedEtag) {
-      var putCached = await client.putBookmarks({
-        html: Bookmarks.serializeHtml(early.model),
-        json: Bookmarks.modelToJsonText(early.model),
-        etag: cachedEtag,
-      });
-      if (putCached.ok) {
-        await writeBookmarksCache(early.model, putCached.etag || null);
-        okFeedback(copy.saveOk);
-        return;
-      }
-      if (putCached.kind !== "conflict") {
-        failFeedback(errorText(putCached.kind));
-        return;
-      }
-    }
-  }
-
-  var res = await client.getBookmarks();
-  if (!res.ok) {
-    failFeedback(errorText(res.kind));
+  if (result.ok) {
+    okFeedback(result.status === "exists" ? copy.saveExists : copy.saveOk);
     return;
   }
-
-  var model = parseRemoteLibrary(res);
-  var add = Bookmarks.addBookmark(model, { title: title, url: url, added: Date.now() });
-  if (!add.added) {
-    await writeBookmarksCache(model, res.etag || null);
-    okFeedback(copy.saveExists);
-    return;
-  }
-
-  var put = await client.putBookmarks({
-    html: Bookmarks.serializeHtml(add.model),
-    json: Bookmarks.modelToJsonText(add.model),
-    etag: res.etag,
-  });
-  if (!put.ok) {
-    failFeedback(errorText(put.kind));
-    return;
-  }
-  await writeBookmarksCache(add.model, put.etag || null);
-  okFeedback(copy.saveOk);
+  failFeedback(errorText(result.kind));
 }
-
-// 工具栏左键点击由 popup.html（收藏弹窗）接管；右键菜单保留一键收藏与主页默认视图切换。
 
 /**
  * #62 P1: the configurable shortcut triggers the same quick-save as the
