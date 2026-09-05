@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Davflare</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="popHead">
+      <img id="pageIcon" class="pageIcon" alt="" hidden />
+      <img src="icons/icon48.png" id="brandIcon" class="pageIcon fallback" alt="" hidden />
+      <div class="pageMeta">
+        <h1 id="pageTitle">Davflare</h1>
+        <p id="pageUrl"></p>
+      </div>
+    </header>
+
+    <p id="bodyNotice" class="bodyNotice hidden"></p>
+    <button id="noticeBtn" class="ghost noticeBtn hidden" type="button"></button>
+
+    <form id="saveForm" class="hidden" novalidate>
+      <label for="saveTitle" id="titleLabel">Title</label>
+      <input id="saveTitle" type="text" spellcheck="false" />
+
+      <label for="saveFolder" id="folderLabel">Folder</label>
+      <input id="saveFolder" type="text" list="folderOptions" spellcheck="false" />
+      <datalist id="folderOptions"></datalist>
+
+      <label for="saveTags" id="tagsLabel">Tags (comma separated)</label>
+      <input id="saveTags" type="text" spellcheck="false" />
+
+      <p id="saveStatus" class="status" role="status"></p>
+      <button id="saveBtn" class="primary saveBtn" type="submit">Save</button>
+    </form>
+
+    <footer class="popFoot">
+      <button id="homeBtn" class="ghost footBtn" type="button">Open Davflare</button>
+      <button id="settingsBtn" class="ghost footBtn" type="button">Settings</button>
+    </footer>
+
+    <script src="url.js"></script>
+    <script src="bookmarks.js"></script>
+    <script src="dav.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -74,10 +74,11 @@ var COPY = {
     pathLabel: "Bookmark directory",
     pathHint:
       "Relative to /webdav/. Default is \"bookmarks\"; e.g. \"qa/bookmarks\" isolates test data.",
-    modeLabel: "Default toolbar view",
+    modeLabel: "Default home view",
     modeDrive: "Drive",
     modeBookmarks: "Bookmark library",
-    modeHint: "Both open this page; right-click the toolbar icon to switch anytime.",
+    modeHint:
+      "The home page (and the popup's entry) opens this view first; the toolbar icon opens the save popup. Right-click the toolbar icon to switch anytime.",
     davLabel: "WebDAV credentials",
     userLabel: "Username",
     passLabel: "Password",
@@ -88,7 +89,7 @@ var COPY = {
     settingsSaved: "Saved.",
     savedNoGrant:
       "Saved, but access to this site was not granted — bookmark features will not work.",
-    settingsCleared: "Saved. With no URL set, the toolbar opens this settings view.",
+    settingsCleared: "Saved. With no URL set, the home page opens this settings view.",
     probeOk: "Connected. WebDAV is enabled.",
     probeOther: "The instance returned an unexpected response.",
     moreLabel: "More",
@@ -224,10 +225,10 @@ var COPY = {
     urlHint: "粘贴你自己的 Pages 或自定义域名。",
     pathLabel: "书签目录",
     pathHint: "相对 /webdav/ 的路径。默认为 bookmarks；可填如 qa/bookmarks 隔离测试数据。",
-    modeLabel: "工具栏默认视图",
+    modeLabel: "插件主页默认视图",
     modeDrive: "网盘",
     modeBookmarks: "书签库",
-    modeHint: "两种模式都打开本页；随时右键工具栏图标切换。",
+    modeHint: "插件主页（含收藏弹窗入口）默认打开该视图；工具栏图标点击弹出收藏弹窗。可随时右键工具栏图标切换。",
     davLabel: "WebDAV 凭据",
     userLabel: "用户名",
     passLabel: "密码",
@@ -236,7 +237,7 @@ var COPY = {
     testing: "测试中…",
     settingsSaved: "已保存。",
     savedNoGrant: "已保存，但未授权访问该站点，书签功能将不可用。",
-    settingsCleared: "已保存。未填写地址时，点击工具栏会打开本设置视图。",
+    settingsCleared: "已保存。未填写地址时，插件主页会打开本设置视图。",
     probeOk: "连接成功，WebDAV 已开启。",
     probeOther: "实例返回了未预期的响应。",
     moreLabel: "更多",
@@ -689,7 +690,7 @@ async function saveSettings(event) {
   setSettingsStatus(t.settingsSaved, "ok");
   $("bannerSettings").classList.add("hidden");
   $("setupHint").textContent = "";
-  // 配置完成（HamHome 式：先配置后使用），进入工具栏默认视图
+  // 配置完成（HamHome 式：先配置后使用），进入插件主页默认视图
   switchView(toolbarMode === "bookmarks" ? "bookmarks" : "drive");
   refresh();
 }
@@ -2423,19 +2424,24 @@ fillColorSelect();
 initTheme();
 wireEvents();
 renderFromCache();
-switchView((function () {
+// 主页初始视图：显式 ?view= 优先；否则跟随「插件主页默认视图」设置
+// （resolveToolbarTarget 在未配置实例时指向 settings，保持先配置后使用）。
+void (async function () {
+  var requested = null;
   try {
-    var requested = new URLSearchParams(location.search).get("view");
-    if (requested && VALID_VIEWS.indexOf(requested) !== -1) return requested;
+    requested = new URLSearchParams(location.search).get("view");
   } catch (err) {
-    /* keep the default view */
+    requested = null;
   }
-  return "bookmarks";
-})());
-refresh();
-// 首次使用：未配置实例时强制进入设置视图（HamHome 式：先配置后使用）
-void loadConfig().then(function (cfg) {
+  if (requested && VALID_VIEWS.indexOf(requested) !== -1) {
+    switchView(requested);
+  } else {
+    var stored = await chrome.storage.sync.get(["instanceUrl", "toolbarMode"]);
+    switchView(resolveToolbarTarget(stored).action);
+  }
+  var cfg = await loadConfig();
   if (cfg.instanceUrl || appState.view === "settings") return;
   switchView("settings");
   showIn("bannerSettings", t.setupHint);
-});
+})();
+refresh();

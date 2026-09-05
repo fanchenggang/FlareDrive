@@ -1,0 +1,214 @@
+/* Action popup — shares the shell's visual tokens (bookmarks.css). */
+
+:root {
+  color-scheme: light;
+  --bg: #f4f1ec;
+  --paper: #ffffff;
+  --paper-soft: #faf8f4;
+  --text: #1a1714;
+  --muted: rgba(26, 23, 20, 0.64);
+  --line: rgba(28, 22, 16, 0.08);
+  --orange: #f38020;
+  --orange-dark: #d96e12;
+  --orange-soft: rgba(243, 128, 32, 0.12);
+  --focus: rgba(243, 128, 32, 0.16);
+  --ok: #2e7d4f;
+  --err: #c4472c;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #14110c;
+  --paper: #221e17;
+  --paper-soft: #191611;
+  --text: #f0ece4;
+  --muted: rgba(240, 236, 228, 0.6);
+  --line: rgba(240, 236, 228, 0.13);
+  --orange: #f79b45;
+  --orange-dark: #ffb066;
+  --orange-soft: rgba(247, 155, 69, 0.16);
+  --focus: rgba(247, 155, 69, 0.22);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  width: 360px;
+  margin: 0;
+  padding: 14px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-family: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  background: var(--paper);
+  color: var(--text);
+}
+
+button {
+  appearance: none;
+  border: 0;
+  border-radius: 8px;
+  background: var(--orange);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  padding: 7px 14px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--orange-dark);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px var(--focus);
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--orange-dark);
+  border: 1px solid var(--orange);
+}
+
+button.ghost:hover {
+  background: var(--orange-soft);
+}
+
+/* ---------- page header ---------- */
+
+.popHead {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.pageIcon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  flex: none;
+  background: var(--paper-soft);
+  border: 1px solid var(--line);
+  object-fit: cover;
+}
+
+.pageIcon.fallback {
+  object-fit: contain;
+  padding: 5px;
+}
+
+.pageMeta {
+  min-width: 0;
+}
+
+.pageMeta h1 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pageMeta p {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- notice states (loading / restricted / unconfigured / error) ---------- */
+
+.bodyNotice {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--paper-soft);
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.noticeBtn {
+  align-self: stretch;
+}
+
+/* ---------- save form ---------- */
+
+#saveForm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#saveForm.hidden,
+.bodyNotice.hidden,
+.noticeBtn.hidden,
+.hidden {
+  display: none;
+}
+
+#saveForm label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+#saveForm input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper-soft);
+  color: var(--text);
+  font: inherit;
+  padding: 7px 10px;
+}
+
+.saveBtn {
+  margin-top: 8px;
+  width: 100%;
+}
+
+.status {
+  margin: 0;
+  min-height: 1.5em;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.status.ok {
+  color: var(--ok);
+}
+
+.status.err {
+  color: var(--err);
+}
+
+/* ---------- footer entries into the shell home ---------- */
+
+.popFoot {
+  display: flex;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.footBtn {
+  flex: 1;
+  font-weight: 600;
+}

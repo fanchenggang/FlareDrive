@@ -75,10 +75,10 @@ function normalizeInstanceUrl(raw) {
 }
 
 /**
- * Toolbar routing. Both modes land on the extension shell page
- * (bookmarks.html) — the mode only picks the view it opens with:
- * drive = embedded instance, bookmarks = bookmark library. An empty or
- * invalid URL opens the in-shell settings view instead of guessing a host.
+ * Where the extension home page (bookmarks.html) lands when opened without an
+ * explicit ?view=: the configured default view. An empty or invalid instance
+ * URL routes to the in-shell settings view instead of guessing a host. The
+ * toolbar click itself opens the save popup (popup.html).
  */
 function resolveToolbarTarget(settings) {
   var merged = mergeSettings(settings);

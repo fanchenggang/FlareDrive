@@ -201,6 +201,27 @@ var Bookmarks = (function () {
     return root;
   }
 
+  /**
+   * Sorted unique folder paths for picker UIs (action popup datalist). Every
+   * ancestor prefix is included so "Dev/Rust" also offers "Dev" as a target.
+   */
+  function folderPaths(model) {
+    var seen = Object.create(null);
+    var items = normalizeModel(model).bookmarks;
+    for (var i = 0; i < items.length; i++) {
+      var folder = String(items[i].folder || "").trim().replace(/^\/+|\/+$/g, "");
+      if (!folder) continue;
+      var segs = folder.split("/");
+      for (var j = 0; j < segs.length; j++) {
+        var path = segs.slice(0, j + 1).join("/");
+        if (path) seen[path] = true;
+      }
+    }
+    return Object.keys(seen).sort(function (a, b) {
+      return a.localeCompare(b);
+    });
+  }
+
   function renderNode(node, depth, lines) {
     var pad = new Array(depth + 1).join("    ");
     for (var i = 0; i < node.links.length; i++) {
@@ -415,6 +436,7 @@ var Bookmarks = (function () {
     addBookmark: addBookmark,
     adoptRichFields: adoptRichFields,
     emptyModel: emptyModel,
+    folderPaths: folderPaths,
     importBackup: importBackup,
     isWebUrl: isWebUrl,
     isValidModel: isValidModel,

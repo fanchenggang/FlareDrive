@@ -67,6 +67,8 @@ describe("Davflare Chrome extension / default package", () => {
   test("is Manifest V3 with action and bookmarks permissions — no NTP override, no options page", () => {
     expect(manifest.manifest_version).toBe(3);
     expect(manifest.action).toBeTruthy();
+    // 工具栏左键点击打开收藏弹窗（HamHome 式），主页入口在弹窗 footer。
+    expect((manifest.action as Record<string, unknown>).default_popup).toBe("popup.html");
     expect(manifest.options_ui).toBeUndefined();
     expect(Object.prototype.hasOwnProperty.call(manifest, "options_ui")).toBe(false);
     expect(manifest.permissions).toEqual([
@@ -89,6 +91,23 @@ describe("Davflare Chrome extension / default package", () => {
     expect(manifest.background).toEqual({ service_worker: "background.js" });
     expect(fs.existsSync(path.join(extDir, "newtab.html"))).toBe(false);
     expect(fs.existsSync(path.join(extDir, "newtab.js"))).toBe(false);
+  });
+
+  test("action popup reuses the shared codec/client and routes the home entry to the shell", () => {
+    const popupHtml = fs.readFileSync(path.join(extDir, "popup.html"), "utf8");
+    expect(popupHtml).toContain('src="url.js"');
+    expect(popupHtml).toContain('src="bookmarks.js"');
+    expect(popupHtml).toContain('src="dav.js"');
+    expect(popupHtml).toContain('src="popup.js"');
+    expect(popupHtml).toContain('id="homeBtn"');
+    expect(popupHtml).toContain('id="settingsBtn"');
+    const popupJs = fs.readFileSync(path.join(extDir, "popup.js"), "utf8");
+    expect(popupJs).toContain("DavflareDav.createDavClient");
+    expect(popupJs).toContain("Bookmarks.addBookmark");
+    expect(popupJs).toContain("bookmarks.html");
+    // 弹窗接管点击后，background 不应再有工具栏点击监听
+    const bg = fs.readFileSync(path.join(extDir, "background.js"), "utf8");
+    expect(bg).not.toContain("chrome.action.onClicked");
   });
 
   test("standalone options page is gone; settings live in the shell page", () => {
@@ -240,6 +259,9 @@ describe("Davflare Chrome extension / release zip", () => {
     expect(names).toContain("bookmarksView.js");
     expect(names).toContain("bookmarks.js");
     expect(names).toContain("dav.js");
+    expect(names).toContain("popup.html");
+    expect(names).toContain("popup.css");
+    expect(names).toContain("popup.js");
     expect(names).toContain("workspaces.js");
     expect(names).toContain("tabRules.js");
     expect(names).toContain("pinyin.js");

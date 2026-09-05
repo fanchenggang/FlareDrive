@@ -13,6 +13,7 @@ const Bookmarks = nodeRequire("../../../extension/bookmarks.js") as {
   ) => { model: BookmarkModel; added: boolean };
   adoptRichFields: (htmlModel: unknown, jsonModel: unknown) => BookmarkModel;
   emptyModel: () => BookmarkModel;
+  folderPaths: (model: unknown) => string[];
   isWebUrl: (url: unknown) => boolean;
   isValidModel: (value: unknown) => boolean;
   mergeModels: (base: unknown, incoming: unknown) => BookmarkModel;
@@ -262,5 +263,29 @@ describe("extension/bookmarks.js json sidecar", () => {
     expect(Bookmarks.isValidModel({ bookmarks: [] })).toBe(false);
     expect(Bookmarks.isWebUrl("https://a.com")).toBe(true);
     expect(Bookmarks.isWebUrl("chrome://settings")).toBe(false);
+  });
+});
+
+describe("extension/bookmarks.js folderPaths", () => {
+  test("lists ancestor prefixes for the popup folder datalist, sorted and unique", () => {
+    const model = Bookmarks.parseHtml(CHROME_EXPORT);
+    expect(Bookmarks.folderPaths(model)).toEqual([
+      "书签栏",
+      "书签栏/Dev",
+      "书签栏/Dev/Rust",
+    ]);
+  });
+
+  test("skips root-level bookmarks, trims slashes, and dedupes", () => {
+    const model = Bookmarks.normalizeModel({
+      bookmarks: [
+        { url: "https://a.com", folder: "" },
+        { url: "https://b.com", folder: "/Work/Rust/" },
+        { url: "https://c.com", folder: "Work/Rust" },
+        { url: "https://d.com", folder: "Work" },
+      ],
+    });
+    expect(Bookmarks.folderPaths(model)).toEqual(["Work", "Work/Rust"]);
+    expect(Bookmarks.folderPaths(Bookmarks.emptyModel())).toEqual([]);
   });
 });

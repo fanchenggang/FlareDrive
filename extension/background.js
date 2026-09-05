@@ -4,7 +4,6 @@ importScripts("url.js", "bookmarks.js", "dav.js");
 
 var MENU_SAVE = "davflare-save-page";
 var MENU_MODE = "davflare-toggle-mode";
-var BOOKMARKS_PAGE = "bookmarks.html";
 
 var MESSAGES = {
   en: {
@@ -13,9 +12,9 @@ var MESSAGES = {
     saveOk: "Bookmark saved to your library.",
     saveExists: "This page is already in your library.",
     skipPage: "Only http(s) pages can be saved.",
-    modeTitle: "Default mode switched",
-    modeDrive: "Toolbar will open your drive.",
-    modeBookmarks: "Toolbar will open your bookmark library.",
+    modeTitle: "Default home view switched",
+    modeDrive: "The home page will open your drive.",
+    modeBookmarks: "The home page will open your bookmark library.",
   },
   zh: {
     appTitle: "Davflare",
@@ -23,9 +22,9 @@ var MESSAGES = {
     saveOk: "已收藏到书签库。",
     saveExists: "该页面已在书签库中。",
     skipPage: "只能收藏 http(s) 页面。",
-    modeTitle: "默认模式已切换",
-    modeDrive: "工具栏点击将打开网盘。",
-    modeBookmarks: "工具栏点击将打开书签库。",
+    modeTitle: "主页默认视图已切换",
+    modeDrive: "插件主页将打开网盘。",
+    modeBookmarks: "插件主页将打开书签库。",
   },
 };
 
@@ -96,35 +95,6 @@ async function loadConfig() {
   };
 }
 
-async function openLibraryPage(view) {
-  var baseUrl = chrome.runtime.getURL(BOOKMARKS_PAGE);
-  var tabs = await chrome.tabs.query({ url: baseUrl + "*"});
-  if (tabs && tabs.length > 0) {
-    var tab = tabs[0];
-    await chrome.tabs.update(tab.id, { active: true });
-    if (typeof tab.windowId === "number") {
-      await chrome.windows.update(tab.windowId, { focused: true });
-    }
-    return;
-  }
-  chrome.tabs.create({ url: baseUrl + "?view=" + view });
-}
-
-async function handleToolbarClick() {
-  var stored = await chrome.storage.sync.get(["instanceUrl", "toolbarMode"]);
-  var target = resolveToolbarTarget(mergeSettings(stored));
-  if (target.action === "bookmarks") {
-    await openLibraryPage("bookmarks");
-    return;
-  }
-  if (target.action === "drive") {
-    await openLibraryPage("drive");
-    return;
-  }
-  // 未配置实例：打开书签库页的设置视图
-  await openLibraryPage("settings");
-}
-
 async function toggleDefaultMode() {
   var stored = await chrome.storage.sync.get(["toolbarMode"]);
   var next = mergeSettings(stored).toolbarMode === "bookmarks" ? "drive" : "bookmarks";
@@ -176,9 +146,7 @@ async function savePage(tab) {
   notify(copy.appTitle, copy.saveOk);
 }
 
-chrome.action.onClicked.addListener(function () {
-  handleToolbarClick();
-});
+// 工具栏左键点击由 popup.html（收藏弹窗）接管；右键菜单保留一键收藏与主页默认视图切换。
 
 chrome.contextMenus.onClicked.addListener(function (info, tab) {
   if (info.menuItemId === MENU_MODE) {
@@ -205,7 +173,7 @@ chrome.runtime.onInstalled.addListener(function () {
   chrome.contextMenus.create(
     {
       id: MENU_MODE,
-      title: zh ? "切换工具栏默认模式" : "Switch toolbar default mode",
+      title: zh ? "切换插件主页默认视图" : "Switch default home view",
       contexts: ["action"],
     },
     function () {
