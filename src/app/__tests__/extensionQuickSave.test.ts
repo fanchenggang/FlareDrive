@@ -14,13 +14,14 @@ const Bookmarks = nodeRequire("../../../extension/bookmarks.js") as {
   serializeHtml: (model: unknown) => string;
   adoptRichFields: (htmlModel: unknown, jsonModel: unknown) => unknown;
   modelFromJson: (text: string) => { ok: boolean; model?: unknown };
+  parseRemoteLibrary: (res: { html?: string; jsonText?: string | null }) => unknown;
 };
 
 const DavflareQuickSave = nodeRequire("../../../extension/quickSave.js") as {
   saveBookmark: (
     deps: Record<string, unknown>,
     page: { title: string; url: string; added?: number }
-  ) => Promise<{ ok: boolean; status?: string; kind?: string }>;
+  ) => Promise<{ ok: boolean; status?: string; kind?: string; message?: string }>;
 };
 
 type PutCall = { etag: string | null | undefined; html: string };
@@ -37,14 +38,7 @@ function htmlWith(url: string, title = "Remote") {
 }
 
 function parseRemote(res: { html?: string; jsonText?: string | null }) {
-  let model = Bookmarks.parseHtml(res.html || "");
-  if (res.jsonText) {
-    const parsed = Bookmarks.modelFromJson(res.jsonText);
-    if (parsed.ok && parsed.model) {
-      model = Bookmarks.adoptRichFields(model, parsed.model);
-    }
-  }
-  return model;
+  return Bookmarks.parseRemoteLibrary(res);
 }
 
 function makeDeps(options: {
@@ -122,7 +116,7 @@ function makeDeps(options: {
   };
 }
 
-describe("extension/quickSave.js (#71 If-Match conflict retry / #73 cache harden)", () => {
+describe("extension/quickSave.js (#71 If-Match conflict retry / #73 cache harden / #75 SW parse)", () => {
   const page = {
     title: "New Page",
     url: "https://example.com/fresh",
@@ -271,4 +265,62 @@ describe("extension/quickSave.js (#71 If-Match conflict retry / #73 cache harden
     expect(result).toEqual({ ok: true, status: "saved" });
     expect(harness.puts).toHaveLength(1);
   });
+
+  test("GET with JSON-only body saves without calling parseHtml (#75 SW / no DOMParser)", async () => {
+    const remoteModel = Bookmarks.addBookmark(Bookmarks.emptyModel(), {
+      title: "Other",
+      url: "https://example.com/other",
+      added: 1,
+    }).model;
+    const jsonText = Bookmarks.modelToJsonText(remoteModel);
+    // Simulate MV3 service worker: no DOMParser. JSON-first parseRemote must still work.
+    const RealDOMParser = (globalThis as { DOMParser?: unknown }).DOMParser;
+    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+    delete (globalThis as { DOMParser?: unknown }).DOMParser;
+    try {
+      const harness = makeDeps({
+        cache: null,
+        getSequence: [
+          {
+            ok: true,
+            html: "<p>not parseable without DOM and unused when JSON present</p>",
+            jsonText,
+            etag: '"e1"',
+          },
+        ],
+        putSequence: [{ ok: true, etag: '"after"' }],
+      });
+      const result = await DavflareQuickSave.saveBookmark(harness.deps, page);
+      expect(result).toEqual({ ok: true, status: "saved" });
+      expect(harness.puts).toHaveLength(1);
+      expect(harness.puts[0].html).toContain("https://example.com/fresh");
+      expect(harness.puts[0].html).toContain("https://example.com/other");
+    } finally {
+      if (RealDOMParser) {
+        (globalThis as { DOMParser?: unknown }).DOMParser = RealDOMParser;
+      }
+    }
+  });
+
+  test("parseRemote throw is returned as unexpected with message (#75)", async () => {
+    const harness = makeDeps({
+      cache: null,
+      getSequence: [{ ok: true, html: "<DL></DL>", etag: '"e1"' }],
+      putSequence: [],
+    });
+    const result = await DavflareQuickSave.saveBookmark(
+      {
+        ...harness.deps,
+        parseRemote: () => {
+          throw new Error("parseHtml requires DOMParser");
+        },
+      },
+      page
+    );
+    expect(result.ok).toBe(false);
+    expect(result.kind).toBe("unexpected");
+    expect(result.message).toContain("DOMParser");
+    expect(harness.puts).toHaveLength(0);
+  });
+
 });

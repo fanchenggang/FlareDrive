@@ -21,6 +21,10 @@ const Bookmarks = nodeRequire("../../../extension/bookmarks.js") as {
   modelToJsonText: (model: unknown) => string;
   normalizeModel: (raw: unknown) => BookmarkModel;
   parseHtml: (text: string) => BookmarkModel;
+  parseRemoteLibrary: (res: {
+    html?: string;
+    jsonText?: string | null;
+  }) => BookmarkModel;
   removeBookmark: (model: unknown, id: string) => BookmarkModel;
   searchBookmarks: (
     model: unknown,
@@ -106,6 +110,82 @@ describe("extension/bookmarks.js parseHtml", () => {
       version: 1,
       bookmarks: [],
     });
+  });
+
+  test("fallback tokenizer matches DOM parse without DOMParser (#75 SW)", () => {
+    const RealDOMParser = (globalThis as { DOMParser?: unknown }).DOMParser;
+    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+    delete (globalThis as { DOMParser?: unknown }).DOMParser;
+    try {
+      const model = Bookmarks.parseHtml(CHROME_EXPORT);
+      expect(model.bookmarks).toHaveLength(4);
+      expect(model.bookmarks[0]).toMatchObject({
+        title: "Root Link",
+        url: "https://root.example/",
+        folder: "",
+      });
+      expect(model.bookmarks[3]).toMatchObject({
+        title: "Rust",
+        url: "https://rust-lang.org",
+        folder: "书签栏/Dev/Rust",
+      });
+      expect(model.bookmarks[2]).toMatchObject({
+        title: "A & B",
+        url: "https://example.org/?q=1&x=2",
+      });
+    } finally {
+      if (RealDOMParser) {
+        (globalThis as { DOMParser?: unknown }).DOMParser = RealDOMParser;
+      }
+    }
+  });
+});
+
+describe("extension/bookmarks.js parseRemoteLibrary (#75)", () => {
+  test("prefers JSON when HTML would need DOMParser", () => {
+    const model = Bookmarks.addBookmark(Bookmarks.emptyModel(), {
+      title: "T",
+      url: "https://json-only.example/",
+      folder: "Dev",
+      tags: ["a"],
+      added: 1_700_000_000_000,
+    }).model;
+    const RealDOMParser = (globalThis as { DOMParser?: unknown }).DOMParser;
+    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+    delete (globalThis as { DOMParser?: unknown }).DOMParser;
+    try {
+      const parsed = Bookmarks.parseRemoteLibrary({
+        html: "<p>ignored</p>",
+        jsonText: Bookmarks.modelToJsonText(model),
+      });
+      expect(parsed.bookmarks).toHaveLength(1);
+      expect(parsed.bookmarks[0]).toMatchObject({
+        url: "https://json-only.example/",
+        folder: "Dev",
+        tags: ["a"],
+      });
+    } finally {
+      if (RealDOMParser) {
+        (globalThis as { DOMParser?: unknown }).DOMParser = RealDOMParser;
+      }
+    }
+  });
+
+  test("HTML-only still works without DOMParser via fallback", () => {
+    const RealDOMParser = (globalThis as { DOMParser?: unknown }).DOMParser;
+    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+    delete (globalThis as { DOMParser?: unknown }).DOMParser;
+    try {
+      const parsed = Bookmarks.parseRemoteLibrary({
+        html: CHROME_EXPORT,
+        jsonText: null,
+      });
+      expect(parsed.bookmarks).toHaveLength(4);
+    } finally {
+      if (RealDOMParser) {
+        (globalThis as { DOMParser?: unknown }).DOMParser = RealDOMParser;
+      }
+    }
   });
 });
 

@@ -121,10 +121,14 @@ describe("Davflare Chrome extension / default package", () => {
     expect(bg).toContain('importScripts("url.js", "bookmarks.js", "dav.js", "quickSave.js")');
     expect(bg).toContain("DavflareQuickSave.saveBookmark");
     expect(fs.existsSync(path.join(extDir, "quickSave.js"))).toBe(true);
-    // #73: savePage try/catch + return Promise from onClicked so MV3 SW stays alive
+        // #73: savePage try/catch + return Promise from onClicked so MV3 SW stays alive
     // and unexpected throws still reach failFeedback (badge + notification).
+    // #75: catch surfaces err.message; parseRemote delegates to Bookmarks
+    // (JSON-first, SW-safe — no DOMParser required).
     expect(bg).toMatch(/async function savePage\([\s\S]*?try\s*\{/);
-    expect(bg).toMatch(/catch\s*\([^)]*\)\s*\{\s*failFeedback\(/);
+    expect(bg).toMatch(/catch\s*\([^)]*\)\s*\{[\s\S]*?failFeedback\(/);
+    expect(bg).toContain('errorText("unexpected"');
+    expect(bg).toContain("Bookmarks.parseRemoteLibrary");
     expect(bg).toContain("return savePage(tab)");
     expect(bg).toContain("chrome.contextMenus.onClicked.addListener");
   });

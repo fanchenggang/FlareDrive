@@ -510,11 +510,7 @@ async function refresh() {
       renderAll();
       return;
     }
-    var model = Bookmarks.parseHtml(res.html || "");
-    if (res.jsonText) {
-      var parsed = Bookmarks.modelFromJson(res.jsonText);
-      if (parsed.ok) model = Bookmarks.adoptRichFields(model, parsed.model);
-    }
+    var model = Bookmarks.parseRemoteLibrary(res);
     state.model = model;
     state.etag = res.etag;
     state.bytes = computeBytes();

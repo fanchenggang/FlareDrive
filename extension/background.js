@@ -64,18 +64,29 @@ function t() {
   return MESSAGES[pickLang()];
 }
 
-function errorText(kind) {
+function errorText(kind, detail) {
   var known = ERROR_COPY[kind];
-  if (known) return known[pickLang()];
-  if (kind && String(kind).indexOf("http") === 0) {
+  var base;
+  if (known) {
+    base = known[pickLang()];
+  } else if (kind && String(kind).indexOf("http") === 0) {
     var code = String(kind).slice(4);
-    return pickLang() === "zh"
-      ? "实例返回了未预期的响应（HTTP " + code + "）。"
-      : "Unexpected response from the instance (HTTP " + code + ").";
+    base =
+      pickLang() === "zh"
+        ? "实例返回了未预期的响应（HTTP " + code + "）。"
+        : "Unexpected response from the instance (HTTP " + code + ").";
+  } else {
+    base =
+      pickLang() === "zh"
+        ? "实例返回了未预期的响应。"
+        : "Unexpected response from the instance.";
   }
-  return pickLang() === "zh"
-    ? "实例返回了未预期的响应。"
-    : "Unexpected response from the instance.";
+  // #75: append throw/message detail on unexpected so QA is not blind.
+  if (kind === "unexpected" && detail) {
+    var clipped = String(detail).replace(/\s+/g, " ").trim().slice(0, 160);
+    if (clipped) base = base + " (" + clipped + ")";
+  }
+  return base;
 }
 
 function flashBadge(text) {
@@ -160,12 +171,7 @@ async function writeBookmarksCache(model, etag) {
 }
 
 function parseRemoteLibrary(res) {
-  var model = Bookmarks.parseHtml(res.html || "");
-  if (res.jsonText) {
-    var parsed = Bookmarks.modelFromJson(res.jsonText);
-    if (parsed.ok) model = Bookmarks.adoptRichFields(model, parsed.model);
-  }
-  return model;
+  return Bookmarks.parseRemoteLibrary(res);
 }
 
 async function toggleDefaultMode() {
@@ -189,6 +195,8 @@ async function toggleDefaultMode() {
  * #73: wrap the whole body in try/catch so an unexpected throw after
  * flashBadge("…") still reaches failFeedback (badge + notification) instead
  * of dying silently when the SW tears down a rejected listener Promise.
+ * #75: unexpected copy includes err.message; parseRemote prefers JSON so the
+ * SW never needs DOMParser for a normal Davflare library GET.
  */
 async function savePage(tab) {
   var copy = t();
@@ -222,9 +230,10 @@ async function savePage(tab) {
       okFeedback(result.status === "exists" ? copy.saveExists : copy.saveOk);
       return;
     }
-    failFeedback(errorText(result.kind));
+    failFeedback(errorText(result.kind, result.message));
   } catch (err) {
-    failFeedback(errorText("unexpected"));
+    var detail = err && err.message ? String(err.message) : String(err || "");
+    failFeedback(errorText("unexpected", detail));
   }
 }
 
