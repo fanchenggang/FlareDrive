@@ -113,6 +113,7 @@ describe("Davflare Chrome extension / default package", () => {
     expect(popupJs).toContain("DavflareDav.createDavClient");
     expect(popupJs).toContain("Bookmarks.addBookmark");
     expect(popupJs).toContain("bookmarks.html");
+    expect(popupJs).toContain("resolveToolbarTarget");
     // 弹窗接管点击后，background 不应再有工具栏点击监听
     const bg = fs.readFileSync(path.join(extDir, "background.js"), "utf8");
     expect(bg).not.toContain("chrome.action.onClicked");

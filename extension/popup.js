@@ -149,20 +149,24 @@ async function loadConfig() {
 
 async function openShell(view) {
   var base = chrome.runtime.getURL("bookmarks.html");
-  var target = base + (view ? "?view=" + encodeURIComponent(view) : "");
+  var resolved = view;
+  // 「插件主页」无显式 view：落到设置里的默认视图（含未配置 → settings）。
+  if (!resolved) {
+    var stored = await chrome.storage.sync.get(["instanceUrl", "toolbarMode"]);
+    resolved = resolveToolbarTarget(stored).action;
+  }
+  var target = base + "?view=" + encodeURIComponent(resolved);
   var tabs = await chrome.tabs.query({ url: base + "*" });
   if (tabs && tabs.length > 0) {
     var tab = tabs[0];
-    var update = { active: true };
     // Reusing an open shell tab still must land on the requested view
-    // (e.g. Settings from the popup), not just focus the existing page.
-    if (view) update.url = target;
-    await chrome.tabs.update(tab.id, update);
+    // (e.g. Settings / default home from the popup), not just focus.
+    await chrome.tabs.update(tab.id, { active: true, url: target });
     if (typeof tab.windowId === "number") {
       await chrome.windows.update(tab.windowId, { focused: true });
     }
   } else {
-    await chrome.tabs.create({ url: target || base });
+    await chrome.tabs.create({ url: target });
   }
   window.close();
 }

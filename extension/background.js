@@ -209,7 +209,14 @@ chrome.omnibox.onInputStarted.addListener(function () {
 chrome.omnibox.onInputChanged.addListener(async function (text, suggest) {
   var model = await cachedBookmarksModel();
   var matches = Bookmarks.searchBookmarks(model, text, OMNI_LIMIT);
-  if (!matches.length) return;
+  if (!matches.length) {
+    chrome.omnibox.setDefaultSuggestion({
+      description:
+        pickLang() === "zh" ? "搜索 Davflare 书签…" : "Search Davflare bookmarks…",
+    });
+    suggest([]);
+    return;
+  }
   var suggestions = [];
   for (var i = 0; i < matches.length; i++) {
     suggestions.push({
