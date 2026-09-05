@@ -861,6 +861,19 @@ dialog textarea {
   cursor: not-allowed;
 }
 
+/* import / export dialog sections (issue #65) */
+.dlgSection {
+  margin-top: 16px;
+  border: none;
+  padding: 0;
+}
+
+.dlgSection legend {
+  font-weight: 600;
+  font-size: 0.8125rem;
+  padding: 0;
+}
+
 /* ---------- drive view (embedded instance) ---------- */
 
 #viewDrive {

@@ -1,8 +1,26 @@
 # FlareDrive 回归测试清单
 
-> 最近一轮：2026-09-06 0a-9/0a-10（扩展设置并入主页 + 首次使用强制配置 + 删除 newtab 变体；书签库 UI 打磨 #57）
-> 前几轮：2026-09-05 0a-8（扩展网盘视图去 iframe，原生挂载 Web 端 React App）、2026-08-30 第三轮四批（Sites 管理面板 + MCP 深化 + davflare-cli）、2026-08-29 第六批（缺陷修复 + B5/B9/C9 收尾 + i18n 第二阶段收编 + 界面美化 + 单测/e2e 落地）、第五批（A9 i18n 第一阶段 + scripts/api-e2e.sh 回归套件沉淀）、第四批（多选拖拽/面包屑下拉/图标扩展）、第三批（目录分享/回收站清理/搜索高亮/动效 11 项）、第二批（目录级 API 等）、首批（暗色模式等）
+> 最近一轮：2026-09-06 0a-11（扩展书签导入导出改为文件 + 收编 HamHome 一级入口，issue #65）
+> 前几轮：2026-09-06 0a-10（扩展设置并入主页 + 首次使用强制配置 + 删除 newtab 变体；书签库 UI 打磨 #57）、2026-09-05 0a-8（扩展网盘视图去 iframe，原生挂载 Web 端 React App）、2026-08-30 第三轮四批（Sites 管理面板 + MCP 深化 + davflare-cli）、2026-08-29 第六批（缺陷修复 + B5/B9/C9 收尾 + i18n 第二阶段收编 + 界面美化 + 单测/e2e 落地）、第五批（A9 i18n 第一阶段 + scripts/api-e2e.sh 回归套件沉淀）、第四批（多选拖拽/面包屑下拉/图标扩展）、第三批（目录分享/回收站清理/搜索高亮/动效 11 项）、第二批（目录级 API 等）、首批（暗色模式等）
 > 约束：所有测试数据操作仅在自己创建的目录内进行，测试后清理。
+
+## 0a-11. 扩展书签导入导出改为文件 + 收编 HamHome 入口（issue #65，2026-09-06）
+
+「导入」从 Chrome bookmarks API 改为文件优先（JSON/HTML），导出补 JSON 完整备份，HamHome 独立一级入口收进导入对话框。
+
+### 改动
+| 项 | 内容 |
+|----|------|
+| 导入对话框 | 「⋯ 更多 → 导入」改为弹导入面板：主按钮「选择文件…（JSON / HTML）」走系统文件选择器（点不动问题闭环）；「从浏览器书签导入」（原一级行为，仍走 bookmarks 可选权限）与「从本实例 HamHomeSync 目录导入」（原独立 HamHome 一级按钮）收编为面板内次要选项；空态按钮从三收二（添加 / 导入） |
+| 格式识别 | `Bookmarks.sniffJsonImport` 按条目字段嗅探 JSON 归属（Davflare: folder/note/added/id；HamHome: categoryId/description/createdAt，裸数组也算 HamHome），`Bookmarks.importBackup` 统一入口吃 Davflare JSON / HamHome JSON（含内联 categories）/ Netscape HTML；`HamHome.importFrom` 支持直接传已解析对象 |
+| 导出对话框 | 「⋯ 更多 → 导出」弹导出面板：HTML（Netscape，浏览器可再导入）+ JSON（完整备份 davflare-bookmarks.json，含 folder/tags/note）；下载逻辑抽 `downloadText` 共用 |
+| 去重与文案 | 导入一律按 URL 合并去重（`mergeModels`），成功提示新增条数；解析失败/文件无书签分别有明确文案（importInvalid / importEmpty，显示在面板内） |
+
+### 待手动回归（Chrome 加载扩展）
+1. 「⋯ 更多 → 导入」弹面板；选 HamHome 导出的 meta.json（或含 categories 的合并 JSON）→ 提示导入条数，文件夹路径正确；选浏览器导出的 HTML → 导入成功。
+2. 重复导入同一文件 → 提示「没有需要导入的新书签」；选无关文件（乱码 JSON/无书签 HTML）→ 面板内明确报错。
+3. 「⋯ 更多 → 导出」分别下载 bookmarks.html 与 davflare-bookmarks.json；HTML 可被 Chrome 书签管理器再导入；JSON 重新导入后标签/备注/文件夹不丢。
+4. 侧栏「⋯ 更多」只剩导入/导出两项；空态只剩「添加 / 导入」；全 UI 无一级 HamHome 入口；导入面板内两个次要选项可用。
 
 ## 0a-10. 扩展书签库 UI 打磨（issue #57，借鉴 HamHome 观感；2026-09-06）
 

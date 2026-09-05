@@ -17,7 +17,9 @@
 var HamHome = (function () {
   var MODEL_VERSION = 1;
 
+  /** Accepts an already-parsed object too (file import hands one over). */
   function parseJson(text) {
+    if (text && typeof text === "object") return text;
     try {
       return JSON.parse(String(text || ""));
     } catch (err) {
