@@ -117,6 +117,10 @@ describe("Davflare Chrome extension / default package", () => {
     // 弹窗接管点击后，background 不应再有工具栏点击监听
     const bg = fs.readFileSync(path.join(extDir, "background.js"), "utf8");
     expect(bg).not.toContain("chrome.action.onClicked");
+    // #71: conflict retry lives in quickSave.js; SW must import it.
+    expect(bg).toContain('importScripts("url.js", "bookmarks.js", "dav.js", "quickSave.js")');
+    expect(bg).toContain("DavflareQuickSave.saveBookmark");
+    expect(fs.existsSync(path.join(extDir, "quickSave.js"))).toBe(true);
   });
 
   test("standalone options page is gone; settings live in the shell page", () => {
@@ -262,6 +266,7 @@ describe("Davflare Chrome extension / release zip", () => {
     expect(names).not.toContain("options.js");
     expect(names).toContain("manifest.json");
     expect(names).toContain("background.js");
+    expect(names).toContain("quickSave.js");
     expect(names).toContain("bookmarks.html");
     expect(names).toContain("bookmarks.css");
     expect(names).toContain("bookmarksApp.js");
