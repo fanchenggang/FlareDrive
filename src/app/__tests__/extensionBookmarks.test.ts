@@ -13,6 +13,7 @@ const Bookmarks = nodeRequire("../../../extension/bookmarks.js") as {
   ) => { model: BookmarkModel; added: boolean };
   adoptRichFields: (htmlModel: unknown, jsonModel: unknown) => BookmarkModel;
   emptyModel: () => BookmarkModel;
+  folderPaths: (model: unknown) => string[];
   isWebUrl: (url: unknown) => boolean;
   isValidModel: (value: unknown) => boolean;
   mergeModels: (base: unknown, incoming: unknown) => BookmarkModel;
@@ -21,6 +22,11 @@ const Bookmarks = nodeRequire("../../../extension/bookmarks.js") as {
   normalizeModel: (raw: unknown) => BookmarkModel;
   parseHtml: (text: string) => BookmarkModel;
   removeBookmark: (model: unknown, id: string) => BookmarkModel;
+  searchBookmarks: (
+    model: unknown,
+    query: string,
+    limit?: number
+  ) => { title: string; url: string; folder: string; tags: string[] }[];
   serializeHtml: (model: unknown) => string;
   updateBookmark: (
     model: unknown,
@@ -262,5 +268,64 @@ describe("extension/bookmarks.js json sidecar", () => {
     expect(Bookmarks.isValidModel({ bookmarks: [] })).toBe(false);
     expect(Bookmarks.isWebUrl("https://a.com")).toBe(true);
     expect(Bookmarks.isWebUrl("chrome://settings")).toBe(false);
+  });
+});
+
+describe("extension/bookmarks.js folderPaths", () => {
+  test("lists ancestor prefixes for the popup folder datalist, sorted and unique", () => {
+    const model = Bookmarks.parseHtml(CHROME_EXPORT);
+    expect(Bookmarks.folderPaths(model)).toEqual([
+      "书签栏",
+      "书签栏/Dev",
+      "书签栏/Dev/Rust",
+    ]);
+  });
+
+  test("skips root-level bookmarks, trims slashes, and dedupes", () => {
+    const model = Bookmarks.normalizeModel({
+      bookmarks: [
+        { url: "https://a.com", folder: "" },
+        { url: "https://b.com", folder: "/Work/Rust/" },
+        { url: "https://c.com", folder: "Work/Rust" },
+        { url: "https://d.com", folder: "Work" },
+      ],
+    });
+    expect(Bookmarks.folderPaths(model)).toEqual(["Work", "Work/Rust"]);
+    expect(Bookmarks.folderPaths(Bookmarks.emptyModel())).toEqual([]);
+  });
+});
+
+describe("extension/bookmarks.js searchBookmarks (issue #62 omnibox)", () => {
+  const model = Bookmarks.normalizeModel({
+    bookmarks: [
+      { url: "https://rust-lang.org", title: "Rust", folder: "Dev/Rust", tags: ["lang"] },
+      { url: "https://example.com", title: "Example", folder: "Work", tags: ["docs", "api"] },
+      { url: "https://news.ycombinator.com", title: "Hacker News", folder: "", tags: ["daily"] },
+    ],
+  });
+
+  test("matches title, url, tag, and folder substrings case-insensitively", () => {
+    expect(Bookmarks.searchBookmarks(model, "RUST")).toHaveLength(1);
+    expect(Bookmarks.searchBookmarks(model, "hacker")).toEqual([
+      expect.objectContaining({ url: "https://news.ycombinator.com" }),
+    ]);
+    expect(Bookmarks.searchBookmarks(model, "docs")).toEqual([
+      expect.objectContaining({ url: "https://example.com" }),
+    ]);
+    expect(Bookmarks.searchBookmarks(model, "work")).toEqual([
+      expect.objectContaining({ url: "https://example.com" }),
+    ]);
+  });
+
+  test("requires every whitespace-separated term (AND)", () => {
+    expect(Bookmarks.searchBookmarks(model, "rust dev")).toHaveLength(1);
+    expect(Bookmarks.searchBookmarks(model, "rust news")).toHaveLength(0);
+  });
+
+  test("caps results at limit and returns nothing for empty queries", () => {
+    expect(Bookmarks.searchBookmarks(model, "o", 1)).toHaveLength(1);
+    expect(Bookmarks.searchBookmarks(model, "")).toEqual([]);
+    expect(Bookmarks.searchBookmarks(model, "   ")).toEqual([]);
+    expect(Bookmarks.searchBookmarks(Bookmarks.emptyModel(), "rust")).toEqual([]);
   });
 });

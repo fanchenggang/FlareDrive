@@ -4,7 +4,6 @@ importScripts("url.js", "bookmarks.js", "dav.js");
 
 var MENU_SAVE = "davflare-save-page";
 var MENU_MODE = "davflare-toggle-mode";
-var BOOKMARKS_PAGE = "bookmarks.html";
 
 var MESSAGES = {
   en: {
@@ -13,9 +12,9 @@ var MESSAGES = {
     saveOk: "Bookmark saved to your library.",
     saveExists: "This page is already in your library.",
     skipPage: "Only http(s) pages can be saved.",
-    modeTitle: "Default mode switched",
-    modeDrive: "Toolbar will open your drive.",
-    modeBookmarks: "Toolbar will open your bookmark library.",
+    modeTitle: "Default home view switched",
+    modeDrive: "The home page will open your drive.",
+    modeBookmarks: "The home page will open your bookmark library.",
   },
   zh: {
     appTitle: "Davflare",
@@ -23,9 +22,9 @@ var MESSAGES = {
     saveOk: "已收藏到书签库。",
     saveExists: "该页面已在书签库中。",
     skipPage: "只能收藏 http(s) 页面。",
-    modeTitle: "默认模式已切换",
-    modeDrive: "工具栏点击将打开网盘。",
-    modeBookmarks: "工具栏点击将打开书签库。",
+    modeTitle: "主页默认视图已切换",
+    modeDrive: "插件主页将打开网盘。",
+    modeBookmarks: "插件主页将打开书签库。",
   },
 };
 
@@ -96,35 +95,6 @@ async function loadConfig() {
   };
 }
 
-async function openLibraryPage(view) {
-  var baseUrl = chrome.runtime.getURL(BOOKMARKS_PAGE);
-  var tabs = await chrome.tabs.query({ url: baseUrl + "*"});
-  if (tabs && tabs.length > 0) {
-    var tab = tabs[0];
-    await chrome.tabs.update(tab.id, { active: true });
-    if (typeof tab.windowId === "number") {
-      await chrome.windows.update(tab.windowId, { focused: true });
-    }
-    return;
-  }
-  chrome.tabs.create({ url: baseUrl + "?view=" + view });
-}
-
-async function handleToolbarClick() {
-  var stored = await chrome.storage.sync.get(["instanceUrl", "toolbarMode"]);
-  var target = resolveToolbarTarget(mergeSettings(stored));
-  if (target.action === "bookmarks") {
-    await openLibraryPage("bookmarks");
-    return;
-  }
-  if (target.action === "drive") {
-    await openLibraryPage("drive");
-    return;
-  }
-  // 未配置实例：打开书签库页的设置视图
-  await openLibraryPage("settings");
-}
-
 async function toggleDefaultMode() {
   var stored = await chrome.storage.sync.get(["toolbarMode"]);
   var next = mergeSettings(stored).toolbarMode === "bookmarks" ? "drive" : "bookmarks";
@@ -176,8 +146,116 @@ async function savePage(tab) {
   notify(copy.appTitle, copy.saveOk);
 }
 
-chrome.action.onClicked.addListener(function () {
-  handleToolbarClick();
+// 工具栏左键点击由 popup.html（收藏弹窗）接管；右键菜单保留一键收藏与主页默认视图切换。
+
+/**
+ * #62 P1: the configurable shortcut triggers the same quick-save as the
+ * toolbar popup. openPopup() shows that exact dialog; when it is
+ * unavailable (older Chrome) or rejects, fall back to the silent
+ * context-menu save path.
+ */
+async function quickSaveCurrentPage() {
+  if (typeof chrome.action.openPopup === "function") {
+    try {
+      await chrome.action.openPopup();
+      return;
+    } catch (err) {
+      /* fall through to the silent save */
+    }
+  }
+  var tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tabs && tabs[0]) await savePage(tabs[0]);
+}
+
+chrome.commands.onCommand.addListener(function (command) {
+  if (command === "save-current-page") quickSaveCurrentPage();
+});
+
+/* ---------- omnibox (#62 P1): "df <query>" searches the cached library ---------- */
+
+var OMNI_LIMIT = 6;
+var CACHE_KEY = "bookmarksCache";
+
+function xmlEscape(text) {
+  return String(text == null ? "" : text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+async function cachedBookmarksModel() {
+  var stored = await chrome.storage.local.get([CACHE_KEY]);
+  var cache = stored && stored[CACHE_KEY];
+  return cache && cache.model ? cache.model : { bookmarks: [] };
+}
+
+function omniDescription(item) {
+  var parts = [xmlEscape(item.title || item.url)];
+  if (item.tags && item.tags.length) {
+    parts.push("<dim>" + xmlEscape(item.tags.join(", ")) + "</dim>");
+  }
+  parts.push("<url>" + xmlEscape(item.url) + "</url>");
+  return parts.join(" ");
+}
+
+chrome.omnibox.onInputStarted.addListener(function () {
+  chrome.omnibox.setDefaultSuggestion({
+    description:
+      pickLang() === "zh" ? "搜索 Davflare 书签…" : "Search Davflare bookmarks…",
+  });
+});
+
+chrome.omnibox.onInputChanged.addListener(async function (text, suggest) {
+  var model = await cachedBookmarksModel();
+  var matches = Bookmarks.searchBookmarks(model, text, OMNI_LIMIT);
+  if (!matches.length) {
+    chrome.omnibox.setDefaultSuggestion({
+      description:
+        pickLang() === "zh" ? "搜索 Davflare 书签…" : "Search Davflare bookmarks…",
+    });
+    suggest([]);
+    return;
+  }
+  var suggestions = [];
+  for (var i = 0; i < matches.length; i++) {
+    suggestions.push({
+      content: matches[i].url,
+      description: omniDescription(matches[i]),
+    });
+  }
+  // 第一条作为默认建议（回车直达），其余进下拉列表。
+  chrome.omnibox.setDefaultSuggestion({ description: suggestions[0].description });
+  suggest(suggestions.slice(1));
+});
+
+chrome.omnibox.onInputEntered.addListener(async function (text, disposition) {
+  var target = "";
+  if (Bookmarks.isWebUrl(text)) {
+    // 用户选中了某条建议：content 即书签 URL。
+    target = text;
+  } else {
+    var model = await cachedBookmarksModel();
+    var matches = Bookmarks.searchBookmarks(model, text, 1);
+    if (matches.length) target = matches[0].url;
+  }
+  var open = function (url) {
+    if (disposition === "newForegroundTab") chrome.tabs.create({ url: url, active: true });
+    else if (disposition === "newBackgroundTab")
+      chrome.tabs.create({ url: url, active: false });
+    else chrome.tabs.update({ url: url });
+  };
+  if (target) {
+    open(target);
+    return;
+  }
+  // 没有命中：退回书签库页面继续找。
+  var libraryUrl = chrome.runtime.getURL("bookmarks.html");
+  if (disposition === "newForegroundTab" || disposition === "newBackgroundTab") {
+    chrome.tabs.create({ url: libraryUrl, active: disposition === "newForegroundTab" });
+  } else {
+    chrome.tabs.update({ url: libraryUrl });
+  }
 });
 
 chrome.contextMenus.onClicked.addListener(function (info, tab) {
@@ -205,7 +283,7 @@ chrome.runtime.onInstalled.addListener(function () {
   chrome.contextMenus.create(
     {
       id: MENU_MODE,
-      title: zh ? "切换工具栏默认模式" : "Switch toolbar default mode",
+      title: zh ? "切换插件主页默认视图" : "Switch default home view",
       contexts: ["action"],
     },
     function () {
